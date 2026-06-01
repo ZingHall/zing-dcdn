@@ -12871,7 +12871,13 @@ dependencies = [
 name = "zing-app"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "zing-core",
 ]
 
