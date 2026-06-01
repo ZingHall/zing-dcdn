@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use walrus_core::encoding::EncodingConfig;
 use walrus_core::encoding::EncodingFactory;
 use walrus_core::metadata::{BlobMetadataApi, VerifiedBlobMetadataWithId};
@@ -5,11 +7,11 @@ use walrus_core::metadata::{BlobMetadataApi, VerifiedBlobMetadataWithId};
 use crate::types::{ZingError, ZingResult};
 
 pub struct BlobVerifier {
-    encoding_config: EncodingConfig,
+    encoding_config: Arc<EncodingConfig>,
 }
 
 impl BlobVerifier {
-    pub fn new(encoding_config: EncodingConfig) -> Self {
+    pub fn new(encoding_config: Arc<EncodingConfig>) -> Self {
         Self { encoding_config }
     }
 

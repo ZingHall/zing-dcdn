@@ -1,4 +1,5 @@
 use walrus_core::encoding::ConsistencyCheckType;
+use walrus_core::encoding::EncodingConfig;
 use walrus_core::encoding::Primary;
 use walrus_core::BlobId;
 use walrus_sdk::node_client::WalrusNodeClient;
@@ -14,6 +15,14 @@ pub struct WalrusL3Client {
 impl WalrusL3Client {
     pub fn new(client: WalrusNodeClient<SuiReadClient>) -> Self {
         Self { inner: client }
+    }
+
+    pub fn encoding_config(&self) -> &EncodingConfig {
+        self.inner.encoding_config()
+    }
+
+    pub fn sui_client(&self) -> &SuiReadClient {
+        self.inner.sui_client()
     }
 
     pub async fn read_blob(&self, blob_id: &BlobId) -> ZingResult<Vec<u8>> {
