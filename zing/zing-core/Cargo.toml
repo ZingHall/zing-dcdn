@@ -10,8 +10,8 @@ walrus-core = { workspace = true }
 walrus-storage-node-client = { workspace = true }
 walrus-sui = { workspace = true }
 
-# P2P — disabled until we can resolve conflicts
-# libp2p = { workspace = true }
+# P2P
+libp2p = { workspace = true }
 
 # Storage
 rocksdb = { workspace = true }
