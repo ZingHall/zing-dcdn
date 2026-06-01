@@ -4,16 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-walrus-core = { workspace = true }
-walrus-sdk = { workspace = true }
-walrus-storage-node-client = { workspace = true }
-walrus-sui = { workspace = true }
-sui-sdk = { workspace = true }
-libp2p = { workspace = true }
+# Walrus/Sui git deps — temporarily disabled until integration phase
+# walrus-core = { workspace = true }
+# walrus-sdk = { workspace = true }
+# walrus-storage-node-client = { workspace = true }
+# walrus-sui = { workspace = true }
+# sui-sdk = { workspace = true }
+# libp2p = { workspace = true }
 rocksdb = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }
-reed-solomon-simd = { workspace = true }
+# reed-solomon-simd = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
