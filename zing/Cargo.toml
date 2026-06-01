@@ -1,0 +1,50 @@
+[workspace]
+members = [
+    "zing-core",
+    "zing-app",
+]
+resolver = "2"
+
+[workspace.dependencies]
+# Walrus (git dependency)
+walrus-core = { git = "https://github.com/MystenLabs/walrus", package = "walrus-core" }
+walrus-sdk = { git = "https://github.com/MystenLabs/walrus", package = "walrus-sdk" }
+walrus-storage-node-client = { git = "https://github.com/MystenLabs/walrus", package = "walrus-storage-node-client" }
+walrus-sui = { git = "https://github.com/MystenLabs/walrus", package = "walrus-sui" }
+
+# Sui (git dependency)
+sui-sdk = { git = "https://github.com/MystenLabs/sui", package = "sui-sdk" }
+
+# P2P
+libp2p = { version = "0.56", features = ["quic", "kad", "gossipsub", "noise", "tcp", "yamux", "macros", "request-response"] }
+
+# Storage
+rocksdb = "0.24"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# Crypto & Encoding
+reed-solomon-simd = "3.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Misc
+bytes = "1"
+lru = "0.12"
+sha2 = "0.10"
+hex = "0.4"

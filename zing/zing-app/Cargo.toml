@@ -1,0 +1,8 @@
+[package]
+name = "zing-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+zing-core = { path = "../zing-core" }
+tokio = { workspace = true }
