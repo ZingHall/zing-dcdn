@@ -1,4 +1,5 @@
-use crate::types::{ZingError, ZingResult};
+// ZingError will be used when SuiClient methods are implemented
+// during integration with the Walrus SuiReadClient.
 
 /// SuiClient wraps the walrus-sui SuiReadClient for on-chain data access.
 ///

@@ -4,7 +4,7 @@ use crate::cache::eviction::EvictionManager;
 use crate::walrus::client::WalrusL3Client;
 use crate::walrus::verify::BlobVerifier;
 use crate::mesh::reputation::PeerReputationTable;
-use crate::types::{ZingError, ZingResult, BlobResolution};
+use crate::types::{ZingResult, BlobResolution};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use walrus_core::BlobId;
@@ -63,7 +63,7 @@ impl Resolver {
 
         // Layer 0.5: Metadata pre-fetch from Walrus for L1 verification
         tracing::info!(blob_id = %blob_id_hex, "fetching metadata for verification");
-        let metadata = match self.walrus_client.fetch_metadata(blob_id).await {
+        let _metadata = match self.walrus_client.fetch_metadata(blob_id).await {
             Ok(m) => m,
             Err(e) => {
                 tracing::warn!(blob_id = %blob_id_hex, error = %e, "metadata pre-fetch failed, forcing L3");
@@ -95,7 +95,6 @@ impl Resolver {
 
         // Run eviction to stay within budget
         {
-            let store = self.store.read().await;
             let pinning = self.pinning.read().await;
             self.eviction.write().await.run(&pinning)?;
         }
