@@ -6,20 +6,24 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-# Walrus (git dependency)
-walrus-core = { git = "https://github.com/MystenLabs/walrus", package = "walrus-core" }
-walrus-sdk = { git = "https://github.com/MystenLabs/walrus", package = "walrus-sdk" }
-walrus-storage-node-client = { git = "https://github.com/MystenLabs/walrus", package = "walrus-storage-node-client" }
-walrus-sui = { git = "https://github.com/MystenLabs/walrus", package = "walrus-sui" }
+# Walrus (local fork dependency)
+walrus-core = { git = "file:///Users/jareklin/dev/main/walrus", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-core" }
+walrus-sdk = { git = "file:///Users/jareklin/dev/main/walrus", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-sdk" }
+walrus-storage-node-client = { git = "file:///Users/jareklin/dev/main/walrus", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-storage-node-client" }
+walrus-sui = { git = "file:///Users/jareklin/dev/main/walrus", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-sui" }
 
-# Sui (git dependency)
-sui-sdk = { git = "https://github.com/MystenLabs/sui", package = "sui-sdk" }
+# Sui (matching Walrus's sui-rust-sdk version)
+sui-sdk-types = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = "5b41bc701525f1b94f1fe63008d4841bc6fb1065", features = ["hash", "serde"] }
+sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = "5b41bc701525f1b94f1fe63008d4841bc6fb1065" }
+
+# Sui (matching Walrus's Sui monorepo version)
+sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.73.0" }
 
 # P2P
-libp2p = { version = "0.56", features = ["quic", "kad", "gossipsub", "noise", "tcp", "yamux", "macros", "request-response"] }
+libp2p = { version = "0.54", features = ["quic", "kad", "gossipsub", "noise", "tcp", "yamux", "macros", "request-response"] }
 
 # Storage
-rocksdb = "0.24"
+rocksdb = "0.22"
 
 # Async
 tokio = { version = "1", features = ["full"] }
