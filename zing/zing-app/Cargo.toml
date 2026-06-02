@@ -6,12 +6,15 @@ edition = "2021"
 [dependencies]
 zing-core = { path = "../zing-core" }
 tokio = { workspace = true }
+clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
+walrus-core = { workspace = true }
+walrus-storage-node-client = { workspace = true }
 
 # Desktop UI — will be enabled during integration
 # dioxus = { version = "0.7", features = ["desktop"] }

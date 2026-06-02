@@ -12873,11 +12873,14 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "clap",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "walrus-core",
+ "walrus-storage-node-client",
  "zing-core",
 ]
 
