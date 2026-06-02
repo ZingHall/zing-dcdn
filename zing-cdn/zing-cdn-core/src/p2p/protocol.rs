@@ -33,7 +33,7 @@ impl BlobResponse {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct JsonProtocolCodec;
 
 #[async_trait]

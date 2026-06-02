@@ -18,7 +18,7 @@ sui-sdk-types = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = 
 sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = "5b41bc701525f1b94f1fe63008d4841bc6fb1065" }
 
 # P2P
-libp2p = { version = "0.54", features = ["quic", "kad", "gossipsub", "noise", "tcp", "yamux", "macros", "request-response"] }
+libp2p = { version = "0.54", features = ["quic", "kad", "gossipsub", "noise", "tcp", "yamux", "macros", "request-response", "identify", "ping"] }
 
 # Storage (matching Walrus)
 rocksdb = "0.22"
