@@ -1,7 +1,10 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
+use libp2p::Multiaddr;
+use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 use walrus_core::metadata::BlobMetadataApi;
@@ -13,6 +16,7 @@ use zing_cdn_core::cache::store::BlobStore;
 use zing_cdn_core::client::ZingClient;
 use zing_cdn_core::mesh::reputation::PeerReputationTable;
 use zing_cdn_core::mesh::resolver::Resolver;
+use zing_cdn_core::p2p::node::{P2pCommand, ZingP2pNode};
 use zing_cdn_core::walrus::verify::BlobVerifier;
 
 const CACHE_BUDGET_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
@@ -26,6 +30,14 @@ struct Cli {
 
     #[arg(short, long)]
     verbose: bool,
+
+    /// P2P listen address
+    #[arg(long, default_value = "/ip4/0.0.0.0/udp/34291/quic-v1")]
+    listen: Multiaddr,
+
+    /// Bootstrap peers (format: /ip4/.../udp/.../quic-v1/p2p/<peer_id>)
+    #[arg(long, short = 'b')]
+    bootstrap: Vec<String>,
 
     #[command(subcommand)]
     command: Command,
@@ -72,9 +84,41 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    let cache_dir = resolve_cache_dir(&cli.cache_dir);
+    let (store, _pinning, _eviction) = open_cache(&cache_dir);
+    let store_handle = Arc::new(RwLock::new(store));
+
+    let (p2p_node, command_rx) = ZingP2pNode::new(store_handle.clone());
+    let p2p_peer_id = p2p_node.local_peer_id();
+    let p2p_command_tx = p2p_node.command_tx().clone();
+    let p2p_key = p2p_node.key().clone();
+    let p2p_listen = cli.listen.clone();
+    let bootstrap_peers = parse_bootstrap_peers(&cli.bootstrap);
+
+    tracing::info!(peer_id = %p2p_peer_id, "starting P2P swarm");
+    tokio::spawn(async move {
+        if let Err(e) = ZingP2pNode::run(
+            p2p_key,
+            command_rx,
+            store_handle,
+            p2p_listen,
+            bootstrap_peers,
+        )
+        .await
+        {
+            tracing::error!(error = %e, "P2P swarm exited");
+        }
+    });
+
+    let p2p_tx = if cli.bootstrap.is_empty() {
+        None
+    } else {
+        Some(p2p_command_tx.clone())
+    };
+
     match cli.command {
-        Command::Get { ref blob_id } => cmd_get(&cli, blob_id).await,
-        Command::Cat { ref blob_id } => cmd_cat(&cli, blob_id).await,
+        Command::Get { ref blob_id } => cmd_get(&cli, blob_id, &p2p_tx).await,
+        Command::Cat { ref blob_id } => cmd_cat(&cli, blob_id, &p2p_tx).await,
         Command::Metadata { ref blob_id } => cmd_metadata(&cli, blob_id).await,
         Command::Status { ref blob_id } => cmd_status(&cli, blob_id).await,
         Command::Verify { ref blob_id } => cmd_verify(&cli, blob_id).await,
@@ -102,6 +146,27 @@ fn open_cache(cache_dir: &PathBuf) -> (BlobStore, PinningManager, EvictionManage
     let pinning = PinningManager::new(store.clone());
     let eviction = EvictionManager::new(store.clone(), CACHE_BUDGET_BYTES);
     (store, pinning, eviction)
+}
+
+fn parse_bootstrap_peers(inputs: &[String]) -> Vec<(libp2p::PeerId, Multiaddr)> {
+    inputs
+        .iter()
+        .filter_map(|s| {
+            if let Ok(addr) = Multiaddr::from_str(s) {
+                let mut peer_id = None;
+                for protocol in addr.iter() {
+                    if let libp2p::multiaddr::Protocol::P2p(peer) = protocol {
+                        peer_id = Some(peer);
+                        break;
+                    }
+                }
+                if let Some(peer_id) = peer_id {
+                    return Some((peer_id, addr));
+                }
+            }
+            None
+        })
+        .collect()
 }
 
 async fn connect_mainnet() -> anyhow::Result<ZingClient> {
@@ -133,7 +198,11 @@ fn format_size(bytes: u64) -> String {
 
 // ── Commands ──────────────────────────────────────────────────────
 
-async fn cmd_get(cli: &Cli, blob_id_str: &str) -> anyhow::Result<()> {
+async fn cmd_get(
+    cli: &Cli,
+    blob_id_str: &str,
+    p2p_tx: &Option<mpsc::Sender<P2pCommand>>,
+) -> anyhow::Result<()> {
     let blob_id = parse_blob_id(blob_id_str)?;
     let client = connect_mainnet().await?;
     let cache_dir = resolve_cache_dir(&cli.cache_dir);
@@ -142,17 +211,31 @@ async fn cmd_get(cli: &Cli, blob_id_str: &str) -> anyhow::Result<()> {
         let (store, pinning, eviction) = open_cache(&cache_dir);
         let walrus_client = client.walrus_client_arc();
         let verifier = Arc::new(BlobVerifier::new(client.encoding_config_arc()));
-        Resolver::new(
+        let mut resolver = Resolver::new(
             Arc::new(RwLock::new(store)),
             Arc::new(RwLock::new(pinning)),
             Arc::new(RwLock::new(eviction)),
             walrus_client,
             verifier,
             Arc::new(RwLock::new(PeerReputationTable::new())),
-        )
+        );
+        if let Some(tx) = p2p_tx {
+            resolver.set_p2p_channel(tx.clone());
+        }
+        resolver
     };
 
     let result = resolver.resolve(&blob_id).await?;
+
+    // Announce blob via P2P so other peers can discover it
+    if let Some(tx) = p2p_tx {
+        let blob_id_bytes = blob_id.0;
+        let _ = tx
+            .send(P2pCommand::AnnounceBlob {
+                blob_id: blob_id_bytes,
+            })
+            .await;
+    }
 
     let source_str = match result.resolution {
         zing_cdn_core::types::BlobResolution::LocalCache => "L0 local cache",
@@ -174,7 +257,11 @@ async fn cmd_get(cli: &Cli, blob_id_str: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_cat(cli: &Cli, blob_id_str: &str) -> anyhow::Result<()> {
+async fn cmd_cat(
+    cli: &Cli,
+    blob_id_str: &str,
+    p2p_tx: &Option<mpsc::Sender<P2pCommand>>,
+) -> anyhow::Result<()> {
     let blob_id = parse_blob_id(blob_id_str)?;
     let client = connect_mainnet().await?;
     let cache_dir = resolve_cache_dir(&cli.cache_dir);
@@ -183,14 +270,18 @@ async fn cmd_cat(cli: &Cli, blob_id_str: &str) -> anyhow::Result<()> {
         let (store, pinning, eviction) = open_cache(&cache_dir);
         let walrus_client = client.walrus_client_arc();
         let verifier = Arc::new(BlobVerifier::new(client.encoding_config_arc()));
-        Resolver::new(
+        let mut resolver = Resolver::new(
             Arc::new(RwLock::new(store)),
             Arc::new(RwLock::new(pinning)),
             Arc::new(RwLock::new(eviction)),
             walrus_client,
             verifier,
             Arc::new(RwLock::new(PeerReputationTable::new())),
-        )
+        );
+        if let Some(tx) = p2p_tx {
+            resolver.set_p2p_channel(tx.clone());
+        }
+        resolver
     };
 
     let result = resolver.resolve(&blob_id).await?;

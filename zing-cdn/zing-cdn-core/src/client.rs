@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use libp2p::PeerId;
+use tokio::sync::mpsc;
 use walrus_core::encoding::EncodingConfig;
 use walrus_core::metadata::VerifiedBlobMetadataWithId;
 use walrus_core::BlobId;
@@ -10,6 +12,7 @@ use walrus_sui::client::contract_config::ContractConfig;
 use walrus_sui::client::retry_client::RetriableSuiClient;
 use walrus_sui::client::SuiReadClient;
 
+use crate::p2p::node::P2pCommand;
 use crate::types::{ZingError, ZingResult};
 use crate::walrus::client::WalrusL3Client;
 
@@ -21,6 +24,8 @@ use crate::walrus::client::WalrusL3Client;
 pub struct ZingClient {
     walrus_client: Arc<WalrusL3Client>,
     encoding_config: Arc<EncodingConfig>,
+    p2p_command_tx: Option<mpsc::Sender<P2pCommand>>,
+    p2p_peer_id: Option<PeerId>,
 }
 
 impl ZingClient {
@@ -59,6 +64,8 @@ impl ZingClient {
         Ok(Self {
             walrus_client,
             encoding_config,
+            p2p_command_tx: None,
+            p2p_peer_id: None,
         })
     }
 
@@ -92,6 +99,23 @@ impl ZingClient {
 
     pub async fn check_blob_status(&self, blob_id: &BlobId) -> ZingResult<BlobStatus> {
         self.walrus_client.check_blob_status(blob_id).await
+    }
+
+    pub fn set_p2p_handle(
+        &mut self,
+        command_tx: mpsc::Sender<P2pCommand>,
+        peer_id: PeerId,
+    ) {
+        self.p2p_command_tx = Some(command_tx);
+        self.p2p_peer_id = Some(peer_id);
+    }
+
+    pub fn p2p_command_tx(&self) -> Option<&mpsc::Sender<P2pCommand>> {
+        self.p2p_command_tx.as_ref()
+    }
+
+    pub fn p2p_peer_id(&self) -> Option<&PeerId> {
+        self.p2p_peer_id.as_ref()
     }
 }
 
