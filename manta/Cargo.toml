@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "zing-core",
-    "zing-app",
+    "manta-core",
+    "manta",
 ]
 resolver = "2"
 

@@ -2,7 +2,7 @@ use libp2p::identity;
 use libp2p::PeerId;
 use crate::types::ZingResult;
 
-pub const ZING_BLOB_PROTOCOL: &str = "/zing/blob/1.0";
+pub const MANTA_BLOB_PROTOCOL: &str = "/manta/blob/1.0";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlobRequest {

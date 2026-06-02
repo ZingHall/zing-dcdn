@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const ZING_BLOB_PROTOCOL: &str = "/zing/blob/1.0";
+pub const MANTA_BLOB_PROTOCOL: &str = "/manta/blob/1.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlobRequest {

@@ -4959,6 +4959,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "manta"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "manta-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "walrus-core",
+ "walrus-storage-node-client",
+]
+
+[[package]]
+name = "manta-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "futures",
+ "hex",
+ "libp2p",
+ "lru 0.12.5",
+ "rocksdb",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "walrus-core",
+ "walrus-sdk",
+ "walrus-storage-node-client",
+ "walrus-sui",
+]
+
+[[package]]
 name = "maplit"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12865,49 +12908,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "zing-app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "walrus-core",
- "walrus-storage-node-client",
- "zing-core",
-]
-
-[[package]]
-name = "zing-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "chrono",
- "futures",
- "hex",
- "libp2p",
- "lru 0.12.5",
- "rocksdb",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "walrus-core",
- "walrus-sdk",
- "walrus-storage-node-client",
- "walrus-sui",
 ]
 
 [[package]]
