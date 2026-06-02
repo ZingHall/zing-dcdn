@@ -1,10 +1,10 @@
 [package]
-name = "manta"
+name = "zing-cdn"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-manta-core = { path = "../manta-core" }
+zing-cdn-core = { path = "../zing-cdn-core" }
 tokio = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }

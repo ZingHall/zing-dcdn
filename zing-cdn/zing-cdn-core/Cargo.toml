@@ -1,5 +1,5 @@
 [package]
-name = "manta-core"
+name = "zing-cdn-core"
 version = "0.1.0"
 edition = "2021"
 

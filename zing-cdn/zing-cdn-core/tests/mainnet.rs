@@ -5,13 +5,13 @@ use tokio::sync::RwLock;
 use walrus_core::metadata::BlobMetadataApi;
 use walrus_core::BlobId;
 
-use manta_core::cache::eviction::EvictionManager;
-use manta_core::cache::pinning::PinningManager;
-use manta_core::cache::store::BlobStore;
-use manta_core::client::ZingClient;
-use manta_core::mesh::reputation::PeerReputationTable;
-use manta_core::mesh::resolver::Resolver;
-use manta_core::walrus::verify::BlobVerifier;
+use zing_cdn_core::cache::eviction::EvictionManager;
+use zing_cdn_core::cache::pinning::PinningManager;
+use zing_cdn_core::cache::store::BlobStore;
+use zing_cdn_core::client::ZingClient;
+use zing_cdn_core::mesh::reputation::PeerReputationTable;
+use zing_cdn_core::mesh::resolver::Resolver;
+use zing_cdn_core::walrus::verify::BlobVerifier;
 
 const TEST_BLOB_ID: &str = "jiuehgokj6HWjr6NbgVcg119r8ZFSFREzwNnHnh4h9Q";
 

@@ -7,19 +7,19 @@ use tracing_subscriber::EnvFilter;
 use walrus_core::metadata::BlobMetadataApi;
 use walrus_core::BlobId;
 
-use manta_core::cache::eviction::EvictionManager;
-use manta_core::cache::pinning::PinningManager;
-use manta_core::cache::store::BlobStore;
-use manta_core::client::ZingClient;
-use manta_core::mesh::reputation::PeerReputationTable;
-use manta_core::mesh::resolver::Resolver;
-use manta_core::walrus::verify::BlobVerifier;
+use zing_cdn_core::cache::eviction::EvictionManager;
+use zing_cdn_core::cache::pinning::PinningManager;
+use zing_cdn_core::cache::store::BlobStore;
+use zing_cdn_core::client::ZingClient;
+use zing_cdn_core::mesh::reputation::PeerReputationTable;
+use zing_cdn_core::mesh::resolver::Resolver;
+use zing_cdn_core::walrus::verify::BlobVerifier;
 
 const CACHE_BUDGET_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
-const DEFAULT_CACHE_DIR: &str = "~/.manta/cache";
+const DEFAULT_CACHE_DIR: &str = "~/.zing-cdn/cache";
 
 #[derive(Parser)]
-#[command(name = "manta", about = "Walrus-native P2P content distribution mesh")]
+#[command(name = "zing-cdn", about = "Walrus-native P2P content distribution mesh")]
 struct Cli {
     #[arg(long, default_value = DEFAULT_CACHE_DIR)]
     cache_dir: String,
@@ -59,10 +59,10 @@ async fn main() -> anyhow::Result<()> {
 
     let filter = if cli.verbose {
         EnvFilter::from_default_env()
-            .add_directive("manta=debug".parse().unwrap())
+            .add_directive("zing_cdn=debug".parse().unwrap())
     } else {
         EnvFilter::from_default_env()
-            .add_directive("manta=info".parse().unwrap())
+            .add_directive("zing_cdn=info".parse().unwrap())
             .add_directive("walrus=warn".parse().unwrap())
             .add_directive("sui=warn".parse().unwrap())
     };
@@ -155,9 +155,9 @@ async fn cmd_get(cli: &Cli, blob_id_str: &str) -> anyhow::Result<()> {
     let result = resolver.resolve(&blob_id).await?;
 
     let source_str = match result.resolution {
-        manta_core::types::BlobResolution::LocalCache => "L0 local cache",
-        manta_core::types::BlobResolution::L1Peer => "L1 peer",
-        manta_core::types::BlobResolution::L3Walrus => "L3 Walrus",
+        zing_cdn_core::types::BlobResolution::LocalCache => "L0 local cache",
+        zing_cdn_core::types::BlobResolution::L1Peer => "L1 peer",
+        zing_cdn_core::types::BlobResolution::L3Walrus => "L3 Walrus",
     };
 
     let cache_str = if result.cached {
@@ -306,7 +306,7 @@ async fn cmd_pin(cli: &Cli, blob_id_str: &str) -> anyhow::Result<()> {
 
     let exists = store.get(blob_id_str)?.is_some();
     if !exists {
-        anyhow::bail!("blob {blob_id_str} not found in cache. fetch it first with `manta get {blob_id_str}`");
+        anyhow::bail!("blob {blob_id_str} not found in cache. fetch it first with `zing-cdn get {blob_id_str}`");
     }
 
     pinning.pin(blob_id_str)?;
