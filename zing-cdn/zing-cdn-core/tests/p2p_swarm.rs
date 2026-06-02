@@ -18,7 +18,7 @@ async fn test_p2p_node_starts_and_listens() {
     let store = create_store();
     let (node, cmd_rx) = ZingP2pNode::new(store.clone());
     let key = node.key().clone();
-    let tx = node.command_tx().clone();
+    let _tx = node.command_tx().clone();
 
     let listen_addr: Multiaddr = "/ip4/127.0.0.1/udp/0/quic-v1"
         .parse()

@@ -138,7 +138,7 @@ impl Resolver {
             .await
             .map_err(|_| ZingError::P2PNetwork("fetch timeout".into()))?
             .map_err(|_| ZingError::P2PNetwork("fetch channel closed".into()))?
-            .map_err(|e| e)?;
+            ?;
 
         // Verify blob against metadata
         self.verifier.verify_blob_against_metadata(metadata, &data)?;
