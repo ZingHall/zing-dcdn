@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.zing-cdn.app",
   "build": {
-    "frontendDist": "../dist",
+    "frontendDist": "../target/dx/zing_cdn_gui/debug/web/public",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "",
-    "beforeBuildCommand": ""
+    "beforeDevCommand": "dx serve --port 1420",
+    "beforeBuildCommand": "dx build"
   },
   "app": {
     "windows": [
@@ -16,7 +16,8 @@
         "title": "zing-cdn \u2014 Walrus P2P Content Mesh",
         "width": 1024,
         "height": 768,
-        "resizable": true
+        "resizable": true,
+        "devtools": true
       }
     ],
     "security": {

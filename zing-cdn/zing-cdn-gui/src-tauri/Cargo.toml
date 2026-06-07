@@ -19,4 +19,4 @@ libp2p = { version = "0.54", features = ["tokio", "quic", "kad", "gossipsub", "n
 dirs = "5"
 
 [build-dependencies]
-tauri-build = "2"
+tauri-build = { version = "2", features = [] }
