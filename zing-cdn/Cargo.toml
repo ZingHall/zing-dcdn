@@ -4,6 +4,7 @@ members = [
     "zing-cdn",
     "zing-cdn-gui/src-tauri",
 ]
+exclude = ["zing-cdn-gui"]
 resolver = "2"
 
 [workspace.dependencies]

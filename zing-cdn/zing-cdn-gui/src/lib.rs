@@ -1,8 +1,6 @@
 mod ipc;
 mod components;
 
-pub use components::*;
-
 use dioxus::prelude::*;
 
 #[derive(PartialEq, Clone)]
@@ -14,7 +12,11 @@ enum Tab {
 
 #[component]
 pub fn App() -> Element {
-    let tab = use_signal(|| Tab::Dashboard);
+    let mut tab = use_signal(|| Tab::Dashboard);
+
+    use crate::components::dashboard::Dashboard;
+    use crate::components::blob::BlobBrowser;
+    use crate::components::cache::Cache;
 
     rsx! {
         div { class: "app",

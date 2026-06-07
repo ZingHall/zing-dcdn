@@ -10,11 +10,11 @@ struct CacheEntry {
 
 #[component]
 pub fn Cache() -> Element {
-    let entries = use_resource(|| async move {
+    let mut entries = use_resource(|| async move {
         invoke_cmd::<Vec<CacheEntry>>("list_cache", {}).await.unwrap_or_default()
     });
 
-    let list = entries.read();
+    let list = (*entries.read()).clone().unwrap_or_default();
 
     rsx! {
         div { class: "card",
@@ -27,45 +27,31 @@ pub fn Cache() -> Element {
                         tr { th { "Blob ID" } th { "Size" } th { "Pinned" } th { "Actions" } }
                     }
                     tbody {
-                        for entry in list.iter() {
+                        for cache_entry in &list {
                             tr {
-                                td { code { "{entry.blob_id}" } }
-                                td { "{entry.size} bytes" }
-                                td { if entry.pinned { "✓" } else { "" } }
+                                td { code { "{cache_entry.blob_id}" } }
+                                td { "{cache_entry.size} bytes" }
+                                td { if cache_entry.pinned { "✓" } else { "" } }
                                 td {
-                                    if entry.pinned {
-                                        button {
-                                            onclick: {
-                                                let id = entry.blob_id.clone();
-                                                move |_| {
-                                                    let id = id.clone();
-                                                    spawn(async move {
-                                                        let _ = invoke_void("unpin_blob", serde_json::json!({"blobId": id})).await;
-                                                        entries.restart();
-                                                    });
-                                                }
-                                            },
-                                            "Unpin"
-                                        }
-                                    } else {
-                                        button {
-                                            onclick: {
-                                                let id = entry.blob_id.clone();
-                                                move |_| {
-                                                    let id = id.clone();
-                                                    spawn(async move {
-                                                        let _ = invoke_void("pin_blob", serde_json::json!({"blobId": id})).await;
-                                                        entries.restart();
-                                                    });
-                                                }
-                                            },
-                                            "Pin"
-                                        }
+                                    button {
+                                        onclick: {
+                                            let id = cache_entry.blob_id.clone();
+                                            let pinned = cache_entry.pinned;
+                                            move |_| {
+                                                let id = id.clone();
+                                                spawn(async move {
+                                                    let cmd = if pinned { "unpin_blob" } else { "pin_blob" };
+                                                    let _ = invoke_void(cmd, serde_json::json!({"blobId": id})).await;
+                                                    entries.restart();
+                                                });
+                                            }
+                                        },
+                                        if cache_entry.pinned { "Unpin" } else { "Pin" }
                                     }
                                     " "
                                     button {
                                         onclick: {
-                                            let id = entry.blob_id.clone();
+                                            let id = cache_entry.blob_id.clone();
                                             move |_| {
                                                 let id = id.clone();
                                                 spawn(async move {

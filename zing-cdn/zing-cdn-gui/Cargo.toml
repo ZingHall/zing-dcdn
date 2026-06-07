@@ -1,0 +1,19 @@
+[package]
+name = "zing-cdn-gui-frontend"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "zing_cdn_gui"
+
+[[bin]]
+name = "zing_cdn_gui"
+path = "src/main.rs"
+
+[dependencies]
+dioxus = { version = "0.7", features = ["web"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde-wasm-bindgen = "0.6"
