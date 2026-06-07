@@ -1,2 +1,2 @@
-mod commands;
-mod state;
+pub mod commands;
+pub mod state;

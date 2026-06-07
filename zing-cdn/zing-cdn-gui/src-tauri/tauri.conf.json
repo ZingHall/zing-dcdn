@@ -1,20 +1,30 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicedoc/tauri/HEAD/core/tauri-config-schema/schema.json",
-  "productName": "zing-cdn-gui",
+  "productName": "zing-cdn",
   "version": "0.1.0",
-  "identifier": "com.zing.cdn-gui",
+  "identifier": "com.zing-cdn.app",
   "build": {
-    "devUrl": "http://localhost:5173",
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": ""
   },
   "app": {
-    "withGlobalTauri": true,
     "windows": [
       {
-        "title": "zing-cdn-gui",
+        "label": "main",
+        "title": "zing-cdn \u2014 Walrus P2P Content Mesh",
         "width": 1024,
-        "height": 768
+        "height": 768,
+        "resizable": true
       }
-    ]
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
   }
 }
