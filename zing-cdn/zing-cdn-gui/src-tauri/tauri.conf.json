@@ -5,8 +5,6 @@
   "identifier": "com.zing-cdn.app",
   "build": {
     "frontendDist": "../target/dx/zing_cdn_gui/debug/web/public",
-    "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "dx serve --port 1420",
     "beforeBuildCommand": "dx build"
   },
   "app": {
