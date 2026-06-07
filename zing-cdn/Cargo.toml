@@ -2,6 +2,7 @@
 members = [
     "zing-cdn-core",
     "zing-cdn",
+    "zing-cdn-gui/src-tauri",
 ]
 resolver = "2"
 

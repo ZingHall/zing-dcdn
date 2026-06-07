@@ -1,0 +1,20 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicedoc/tauri/HEAD/core/tauri-config-schema/schema.json",
+  "productName": "zing-cdn-gui",
+  "version": "0.1.0",
+  "identifier": "com.zing.cdn-gui",
+  "build": {
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "zing-cdn-gui",
+        "width": 1024,
+        "height": 768
+      }
+    ]
+  }
+}
