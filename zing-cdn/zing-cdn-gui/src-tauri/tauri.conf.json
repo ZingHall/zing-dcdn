@@ -5,7 +5,7 @@
   "identifier": "com.zing-cdn.app",
   "build": {
     "frontendDist": "../target/dx/zing_cdn_gui/debug/web/public",
-    "beforeBuildCommand": "dx build"
+    "beforeBuildCommand": "dx build && sed -i '' 's/ type=\"module\" async / type=\"module\" /' target/dx/zing_cdn_gui/debug/web/public/index.html"
   },
   "app": {
     "windows": [
