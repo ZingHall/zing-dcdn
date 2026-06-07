@@ -4,7 +4,7 @@ use crate::cache::eviction::EvictionManager;
 use crate::walrus::client::WalrusL3Client;
 use crate::walrus::verify::BlobVerifier;
 use crate::mesh::reputation::PeerReputationTable;
-use crate::types::{ZingError, ZingResult, BlobResolution};
+use crate::types::{ZingResult, BlobResolution};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -71,20 +71,10 @@ impl Resolver {
             }
         }
 
-        // Layer 0.5: Metadata pre-fetch from Walrus for L1 verification
-        tracing::info!(blob_id = %blob_id_hex, "fetching metadata for verification");
-        let metadata = match self.walrus_client.fetch_metadata(blob_id).await {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(blob_id = %blob_id_hex, error = %e, "metadata pre-fetch failed, forcing L3");
-                return self.resolve_from_walrus(blob_id, &blob_id_hex).await;
-            }
-        };
-
-        // Layer 1: P2P peers
+        // Layer 1: P2P peers (no metadata needed upfront)
         if let Some(ref tx) = self.p2p_command_tx {
-            if let Ok(data) = self.resolve_from_l1(blob_id, &blob_id_hex, &metadata, tx).await {
-                return Ok(data);
+            if let Some(result) = self.resolve_from_l1(blob_id, &blob_id_hex, tx).await {
+                return result;
             }
         }
 
@@ -96,16 +86,17 @@ impl Resolver {
         &self,
         blob_id: &BlobId,
         blob_id_hex: &str,
-        metadata: &walrus_core::metadata::VerifiedBlobMetadataWithId,
         tx: &mpsc::Sender<P2pCommand>,
-    ) -> ZingResult<ResolveResult> {
+    ) -> Option<ZingResult<ResolveResult>> {
         tracing::info!(blob_id = %blob_id_hex, "L1: looking up DHT providers");
 
         let (find_reply, find_rx) = tokio::sync::oneshot::channel();
-        tx.send(P2pCommand::FindProviders {
+        if tx.send(P2pCommand::FindProviders {
             blob_id: blob_id.0,
             reply: find_reply,
-        }).await.map_err(|_| ZingError::P2PNetwork("p2p channel closed".into()))?;
+        }).await.is_err() {
+            return None;
+        }
 
         let peers = tokio::time::timeout(Duration::from_secs(5), find_rx)
             .await
@@ -114,54 +105,64 @@ impl Resolver {
 
         if peers.is_empty() {
             tracing::info!(blob_id = %blob_id_hex, "L1: no providers found in DHT");
-            return Err(ZingError::NoPeersAvailable(blob_id_hex.to_string()));
+            return None;
         }
 
-        // Pick highest-reputation peer
         let peer = {
-            let reputation = self.reputation.read().await;
+            let rep = self.reputation.read().await;
             peers.into_iter()
-                .max_by_key(|p| reputation.get_score(&p.to_string()).unwrap_or(0))
-                .ok_or_else(|| ZingError::NoPeersAvailable(blob_id_hex.to_string()))?
+                .max_by_key(|p| rep.get_score(&p.to_string()).unwrap_or(0))?
         };
 
         tracing::info!(blob_id = %blob_id_hex, peer = %peer, "L1: fetching from peer");
 
         let (fetch_reply, fetch_rx) = tokio::sync::oneshot::channel();
-        tx.send(P2pCommand::FetchBlob {
+        if tx.send(P2pCommand::FetchBlob {
             peer_id: peer,
             blob_id: blob_id.0,
             reply: fetch_reply,
-        }).await.map_err(|_| ZingError::P2PNetwork("p2p channel closed".into()))?;
+        }).await.is_err() {
+            return None;
+        }
 
-        let data = tokio::time::timeout(Duration::from_secs(30), fetch_rx)
-            .await
-            .map_err(|_| ZingError::P2PNetwork("fetch timeout".into()))?
-            .map_err(|_| ZingError::P2PNetwork("fetch channel closed".into()))?
-            ?;
+        let data = match tokio::time::timeout(Duration::from_secs(30), fetch_rx).await {
+            Ok(Ok(Ok(data))) => data,
+            _ => return None,
+        };
 
-        // Verify blob against metadata
-        self.verifier.verify_blob_against_metadata(metadata, &data)?;
+        let metadata = match self.walrus_client.fetch_metadata(blob_id).await {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(blob_id = %blob_id_hex, error = %e, "L1: metadata fetch failed");
+                return None;
+            }
+        };
 
-        // Cache locally
+        if let Err(e) = self.verifier.verify_blob_against_metadata(&metadata, &data) {
+            tracing::warn!(blob_id = %blob_id_hex, error = %e, "L1: verification failed");
+            self.reputation.write().await.record_corruption(&peer.to_string());
+            return None;
+        }
+
         {
             let store = self.store.write().await;
-            store.put(blob_id_hex, &data)?;
+            if let Err(e) = store.put(blob_id_hex, &data) {
+                tracing::warn!(blob_id = %blob_id_hex, error = %e, "L1: cache write failed");
+            }
         }
         {
             let pinning = self.pinning.read().await;
-            self.eviction.write().await.run(&pinning)?;
+            let _ = self.eviction.write().await.run(&pinning);
         }
 
-        // Record success
         self.reputation.write().await.record_success(&peer.to_string());
-
         tracing::info!(blob_id = %blob_id_hex, peer = %peer, "L1: blob fetched and verified");
-        Ok(ResolveResult {
+
+        Some(Ok(ResolveResult {
             data,
             resolution: BlobResolution::L1Peer,
             cached: false,
-        })
+        }))
     }
 
     async fn resolve_from_walrus(&self, blob_id: &BlobId, blob_id_hex: &str) -> ZingResult<ResolveResult> {
@@ -171,13 +172,10 @@ impl Resolver {
 
         tracing::info!(blob_id = %blob_id_hex, size = size, "L3: blob verified, caching locally");
 
-        // Cache the blob
         {
             let store = self.store.write().await;
             store.put(blob_id_hex, &data)?;
         }
-
-        // Run eviction to stay within budget
         {
             let pinning = self.pinning.read().await;
             self.eviction.write().await.run(&pinning)?;

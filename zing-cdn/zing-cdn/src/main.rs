@@ -39,6 +39,10 @@ struct Cli {
     #[arg(long, short = 'b')]
     bootstrap: Vec<String>,
 
+    /// Keep P2P node alive after command completes
+    #[arg(long)]
+    serve: bool,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -85,22 +89,31 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cache_dir = resolve_cache_dir(&cli.cache_dir);
-    let (store, _pinning, _eviction) = open_cache(&cache_dir);
-    let store_handle = Arc::new(RwLock::new(store));
+    std::fs::create_dir_all(&cache_dir).expect("create cache directory");
+    let store = BlobStore::open(&cache_dir).expect("open blob store");
+    let pinning = PinningManager::new(store.clone());
+    let eviction = EvictionManager::new(store.clone(), CACHE_BUDGET_BYTES);
+    let cache_store = Arc::new(RwLock::new(store));
+    let cache_pinning = Arc::new(RwLock::new(pinning));
+    let cache_eviction = Arc::new(RwLock::new(eviction));
 
-    let (p2p_node, command_rx) = ZingP2pNode::new(store_handle.clone());
+    let store_handle = cache_store.clone();
+    let (p2p_node, command_rx) = ZingP2pNode::new(store_handle);
     let p2p_peer_id = p2p_node.local_peer_id();
     let p2p_command_tx = p2p_node.command_tx().clone();
     let p2p_key = p2p_node.key().clone();
     let p2p_listen = cli.listen.clone();
     let bootstrap_peers = parse_bootstrap_peers(&cli.bootstrap);
 
-    tracing::info!(peer_id = %p2p_peer_id, "starting P2P swarm");
+    tracing::info!(peer_id = %p2p_peer_id, listen = %cli.listen, "starting P2P swarm");
+    eprintln!("P2P peer_id: {p2p_peer_id}");
+    eprintln!("P2P listen:  {}", cli.listen);
+    let p2p_store = cache_store.clone();
     tokio::spawn(async move {
         if let Err(e) = ZingP2pNode::run(
             p2p_key,
             command_rx,
-            store_handle,
+            p2p_store,
             p2p_listen,
             bootstrap_peers,
         )
@@ -117,16 +130,28 @@ async fn main() -> anyhow::Result<()> {
     };
 
     match cli.command {
-        Command::Get { ref blob_id } => cmd_get(&cli, blob_id, &p2p_tx).await,
-        Command::Cat { ref blob_id } => cmd_cat(&cli, blob_id, &p2p_tx).await,
+        Command::Get { ref blob_id } => {
+            cmd_get(&cli, blob_id, &p2p_tx, &cache_store, &cache_pinning, &cache_eviction).await
+        }
+        Command::Cat { ref blob_id } => {
+            cmd_cat(&cli, blob_id, &p2p_tx, &cache_store, &cache_pinning, &cache_eviction).await
+        }
         Command::Metadata { ref blob_id } => cmd_metadata(&cli, blob_id).await,
         Command::Status { ref blob_id } => cmd_status(&cli, blob_id).await,
         Command::Verify { ref blob_id } => cmd_verify(&cli, blob_id).await,
-        Command::List => cmd_list(&cli).await,
-        Command::Pin { ref blob_id } => cmd_pin(&cli, blob_id).await,
-        Command::Unpin { ref blob_id } => cmd_unpin(&cli, blob_id).await,
-        Command::Info { ref blob_id } => cmd_info(&cli, blob_id).await,
+        Command::List => cmd_list(&cache_store, &cache_pinning).await,
+        Command::Pin { ref blob_id } => cmd_pin(blob_id, &cache_store, &cache_pinning).await,
+        Command::Unpin { ref blob_id } => cmd_unpin(blob_id, &cache_pinning).await,
+        Command::Info { ref blob_id } => cmd_info(blob_id, &cache_store, &cache_pinning).await,
+    }?;
+
+    if cli.serve {
+        eprintln!("P2P node running. Press Ctrl+C to stop.");
+        tokio::signal::ctrl_c().await?;
+        eprintln!("Shutting down...");
     }
+
+    Ok(())
 }
 
 fn resolve_cache_dir(path: &str) -> PathBuf {
@@ -140,13 +165,6 @@ fn resolve_cache_dir(path: &str) -> PathBuf {
     }
 }
 
-fn open_cache(cache_dir: &PathBuf) -> (BlobStore, PinningManager, EvictionManager) {
-    std::fs::create_dir_all(cache_dir).expect("create cache directory");
-    let store = BlobStore::open(cache_dir).expect("open blob store");
-    let pinning = PinningManager::new(store.clone());
-    let eviction = EvictionManager::new(store.clone(), CACHE_BUDGET_BYTES);
-    (store, pinning, eviction)
-}
 
 fn parse_bootstrap_peers(inputs: &[String]) -> Vec<(libp2p::PeerId, Multiaddr)> {
     inputs
@@ -202,28 +220,25 @@ async fn cmd_get(
     cli: &Cli,
     blob_id_str: &str,
     p2p_tx: &Option<mpsc::Sender<P2pCommand>>,
+    cache_store: &Arc<RwLock<BlobStore>>,
+    cache_pinning: &Arc<RwLock<PinningManager>>,
+    cache_eviction: &Arc<RwLock<EvictionManager>>,
 ) -> anyhow::Result<()> {
     let blob_id = parse_blob_id(blob_id_str)?;
     let client = connect_mainnet().await?;
     let cache_dir = resolve_cache_dir(&cli.cache_dir);
 
-    let resolver = {
-        let (store, pinning, eviction) = open_cache(&cache_dir);
-        let walrus_client = client.walrus_client_arc();
-        let verifier = Arc::new(BlobVerifier::new(client.encoding_config_arc()));
-        let mut resolver = Resolver::new(
-            Arc::new(RwLock::new(store)),
-            Arc::new(RwLock::new(pinning)),
-            Arc::new(RwLock::new(eviction)),
-            walrus_client,
-            verifier,
-            Arc::new(RwLock::new(PeerReputationTable::new())),
-        );
-        if let Some(tx) = p2p_tx {
-            resolver.set_p2p_channel(tx.clone());
-        }
-        resolver
-    };
+    let mut resolver = Resolver::new(
+        cache_store.clone(),
+        cache_pinning.clone(),
+        cache_eviction.clone(),
+        client.walrus_client_arc(),
+        Arc::new(BlobVerifier::new(client.encoding_config_arc())),
+        Arc::new(RwLock::new(PeerReputationTable::new())),
+    );
+    if let Some(tx) = p2p_tx {
+        resolver.set_p2p_channel(tx.clone());
+    }
 
     let result = resolver.resolve(&blob_id).await?;
 
@@ -258,31 +273,27 @@ async fn cmd_get(
 }
 
 async fn cmd_cat(
-    cli: &Cli,
+    _cli: &Cli,
     blob_id_str: &str,
     p2p_tx: &Option<mpsc::Sender<P2pCommand>>,
+    cache_store: &Arc<RwLock<BlobStore>>,
+    cache_pinning: &Arc<RwLock<PinningManager>>,
+    cache_eviction: &Arc<RwLock<EvictionManager>>,
 ) -> anyhow::Result<()> {
     let blob_id = parse_blob_id(blob_id_str)?;
     let client = connect_mainnet().await?;
-    let cache_dir = resolve_cache_dir(&cli.cache_dir);
 
-    let resolver = {
-        let (store, pinning, eviction) = open_cache(&cache_dir);
-        let walrus_client = client.walrus_client_arc();
-        let verifier = Arc::new(BlobVerifier::new(client.encoding_config_arc()));
-        let mut resolver = Resolver::new(
-            Arc::new(RwLock::new(store)),
-            Arc::new(RwLock::new(pinning)),
-            Arc::new(RwLock::new(eviction)),
-            walrus_client,
-            verifier,
-            Arc::new(RwLock::new(PeerReputationTable::new())),
-        );
-        if let Some(tx) = p2p_tx {
-            resolver.set_p2p_channel(tx.clone());
-        }
-        resolver
-    };
+    let mut resolver = Resolver::new(
+        cache_store.clone(),
+        cache_pinning.clone(),
+        cache_eviction.clone(),
+        client.walrus_client_arc(),
+        Arc::new(BlobVerifier::new(client.encoding_config_arc())),
+        Arc::new(RwLock::new(PeerReputationTable::new())),
+    );
+    if let Some(tx) = p2p_tx {
+        resolver.set_p2p_channel(tx.clone());
+    }
 
     let result = resolver.resolve(&blob_id).await?;
     // Write raw bytes to stdout (stderr is used for tracing)
@@ -367,13 +378,15 @@ async fn cmd_verify(_cli: &Cli, blob_id_str: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_list(cli: &Cli) -> anyhow::Result<()> {
-    let cache_dir = resolve_cache_dir(&cli.cache_dir);
-    let (store, pinning, _eviction) = open_cache(&cache_dir);
+async fn cmd_list(
+    cache_store: &Arc<RwLock<BlobStore>>,
+    cache_pinning: &Arc<RwLock<PinningManager>>,
+) -> anyhow::Result<()> {
+    let store = cache_store.read().await;
+    let pinning = cache_pinning.read().await;
 
     let ids = store.list_blob_ids()?;
     if ids.is_empty() {
-        println!("No blobs cached (cache dir: {})", cache_dir.display());
         return Ok(());
     }
 
@@ -391,38 +404,47 @@ async fn cmd_list(cli: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn cmd_pin(cli: &Cli, blob_id_str: &str) -> anyhow::Result<()> {
-    let cache_dir = resolve_cache_dir(&cli.cache_dir);
-    let (store, pinning, _eviction) = open_cache(&cache_dir);
-
+async fn cmd_pin(
+    blob_id_str: &str,
+    cache_store: &Arc<RwLock<BlobStore>>,
+    cache_pinning: &Arc<RwLock<PinningManager>>,
+) -> anyhow::Result<()> {
+    let store = cache_store.read().await;
     let exists = store.get(blob_id_str)?.is_some();
     if !exists {
         anyhow::bail!("blob {blob_id_str} not found in cache. fetch it first with `zing-cdn get {blob_id_str}`");
     }
+    drop(store);
 
+    let pinning = cache_pinning.read().await;
     pinning.pin(blob_id_str)?;
     println!("Blob {blob_id_str} pinned");
     Ok(())
 }
 
-async fn cmd_unpin(cli: &Cli, blob_id_str: &str) -> anyhow::Result<()> {
-    let cache_dir = resolve_cache_dir(&cli.cache_dir);
-    let (_store, pinning, _eviction) = open_cache(&cache_dir);
-
+async fn cmd_unpin(
+    blob_id_str: &str,
+    cache_pinning: &Arc<RwLock<PinningManager>>,
+) -> anyhow::Result<()> {
+    let pinning = cache_pinning.read().await;
     pinning.unpin(blob_id_str)?;
     println!("Blob {blob_id_str} unpinned");
     Ok(())
 }
 
-async fn cmd_info(cli: &Cli, blob_id_str: &str) -> anyhow::Result<()> {
-    let cache_dir = resolve_cache_dir(&cli.cache_dir);
-    let (store, pinning, _eviction) = open_cache(&cache_dir);
-
+async fn cmd_info(
+    blob_id_str: &str,
+    cache_store: &Arc<RwLock<BlobStore>>,
+    cache_pinning: &Arc<RwLock<PinningManager>>,
+) -> anyhow::Result<()> {
+    let store = cache_store.read().await;
     let data = match store.get(blob_id_str)? {
         Some(d) => d,
         None => anyhow::bail!("blob {blob_id_str} not found in cache"),
     };
+    drop(store);
 
+    let pinning = cache_pinning.read().await;
     let pinned = pinning.is_pinned(blob_id_str)?;
     let size = data.len();
 

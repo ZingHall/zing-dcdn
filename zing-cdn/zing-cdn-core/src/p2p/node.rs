@@ -35,6 +35,7 @@ pub enum P2pCommand {
     },
     Bootstrap,
     GetConnectedPeers { reply: oneshot::Sender<Vec<PeerId>> },
+    Dial { peer_id: PeerId, addr: Multiaddr },
 }
 
 pub struct ZingP2pNode {
@@ -175,6 +176,14 @@ impl ZingP2pNode {
             P2pCommand::GetConnectedPeers { reply } => {
                 let peers: Vec<PeerId> = swarm.connected_peers().copied().collect();
                 let _ = reply.send(peers);
+            }
+            P2pCommand::Dial { peer_id, addr } => {
+                let mut dial_addr = addr.clone();
+                dial_addr.push(libp2p::multiaddr::Protocol::P2p(peer_id));
+                match swarm.dial(dial_addr) {
+                    Ok(()) => tracing::info!(%peer_id, "dialing peer"),
+                    Err(e) => tracing::warn!(error = %e, %peer_id, "dial failed"),
+                }
             }
         }
     }
