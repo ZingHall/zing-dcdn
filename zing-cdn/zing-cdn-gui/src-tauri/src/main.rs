@@ -3,7 +3,6 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use libp2p::Multiaddr;
-use dirs;
 use tauri::Manager;
 
 use zing_cdn_core::cache::store::BlobStore;
