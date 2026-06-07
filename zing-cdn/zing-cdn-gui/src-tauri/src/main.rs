@@ -29,57 +29,50 @@ fn main() {
         .setup(|app| {
             let handle = app.handle().clone();
 
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-                let _guard = rt.enter();
+            let cache_dir = dirs::home_dir()
+                .unwrap_or_default()
+                .join(".zing-cdn")
+                .join("cache");
+            std::fs::create_dir_all(&cache_dir).expect("create cache dir");
 
-                let cache_dir = dirs::home_dir()
-                    .unwrap_or_default()
-                    .join(".zing-cdn")
-                    .join("cache");
-                std::fs::create_dir_all(&cache_dir).expect("create cache dir");
+            let store = Arc::new(RwLock::new(
+                BlobStore::open(&cache_dir).expect("open blob store"),
+            ));
 
-                let store = Arc::new(RwLock::new(
-                    BlobStore::open(&cache_dir).expect("open blob store"),
-                ));
+            // Create P2P node (synchronous)
+            let (p2p_node, command_rx) = ZingP2pNode::new(store.clone());
+            let p2p_tx = p2p_node.command_tx().clone();
+            let p2p_key = p2p_node.key().clone();
+            let peer_id = p2p_node.local_peer_id();
+            let listen_addr: Multiaddr = "/ip4/0.0.0.0/udp/34291/quic-v1"
+                .parse()
+                .expect("valid listen addr");
 
-                let (p2p_node, command_rx) = ZingP2pNode::new(store.clone());
-                let p2p_tx = p2p_node.command_tx().clone();
-                let p2p_key = p2p_node.key().clone();
-                let peer_id = p2p_node.local_peer_id();
-                let listen_addr: Multiaddr = "/ip4/0.0.0.0/udp/34291/quic-v1"
-                    .parse()
-                    .expect("valid listen addr");
+            // Create managers
+            let pinning = Arc::new(RwLock::new(PinningManager::new(
+                store.blocking_read().clone(),
+            )));
+            let eviction = Arc::new(RwLock::new(EvictionManager::new(
+                store.blocking_read().clone(),
+                CACHE_BUDGET,
+            )));
 
-                let p2p_store = store.clone();
-                let listen_clone = listen_addr.clone();
-                rt.spawn(async move {
-                    let _ = ZingP2pNode::run(
-                        p2p_key, command_rx, p2p_store, listen_clone, vec![],
-                    ).await;
-                });
+            // Register AppState synchronously before spawning background tasks
+            handle.manage(AppState {
+                store: store.clone(),
+                pinning,
+                eviction,
+                p2p_tx: p2p_tx.clone(),
+                peer_id,
+                listen_addr: listen_addr.clone(),
+                p2p_store: store.clone(),
+            });
 
-                let pinning = Arc::new(RwLock::new(PinningManager::new(
-                    store.blocking_read().clone(),
-                )));
-                let eviction = Arc::new(RwLock::new(EvictionManager::new(
-                    store.blocking_read().clone(),
-                    CACHE_BUDGET,
-                )));
-
-                let p2p_store = store.clone();
-
-                let app_state = AppState {
-                    store,
-                    pinning,
-                    eviction,
-                    p2p_tx,
-                    peer_id,
-                    listen_addr,
-                    p2p_store,
-                };
-
-                handle.manage(app_state);
+            // Spawn P2P background task via Tauri's async runtime
+            tauri::async_runtime::spawn(async move {
+                let _ = ZingP2pNode::run(
+                    p2p_key, command_rx, store, listen_addr, vec![],
+                ).await;
             });
 
             Ok(())
