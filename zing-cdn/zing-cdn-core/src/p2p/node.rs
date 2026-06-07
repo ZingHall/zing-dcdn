@@ -1,12 +1,10 @@
 use std::collections::HashMap;
+use std::time::Duration;
 use futures::stream::StreamExt;
 use libp2p::identity;
 use libp2p::kad;
-use libp2p::noise;
 use libp2p::request_response;
 use libp2p::swarm::SwarmEvent;
-use libp2p::tcp;
-use libp2p::yamux;
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -75,15 +73,10 @@ impl ZingP2pNode {
         let store_for_builder = store.clone();
         let mut swarm = SwarmBuilder::with_existing_identity(key)
             .with_tokio()
-            .with_tcp(
-                tcp::Config::default(),
-                noise::Config::new,
-                yamux::Config::default,
-            )
-            .map_err(|e| ZingError::P2PNetwork(e.to_string()))?
             .with_quic()
             .with_behaviour(move |key| ZingBehaviour::new(key, store_for_builder))
-            .expect("Failed to build swarm")
+            .map_err(|e| ZingError::P2PNetwork(e.to_string()))?
+            .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(30)))
             .build();
 
         swarm
@@ -216,6 +209,12 @@ impl ZingP2pNode {
                 peer_id, cause, ..
             } => {
                 tracing::info!(peer_id = %peer_id, cause = ?cause, "P2P connection closed");
+            }
+            SwarmEvent::Dialing { peer_id, .. } => {
+                tracing::info!(peer_id = ?peer_id, "P2P dialing peer");
+            }
+            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                tracing::warn!(peer_id = ?peer_id, %error, "P2P outgoing connection failed");
             }
             SwarmEvent::IncomingConnection { .. } => {}
             _ => {}
