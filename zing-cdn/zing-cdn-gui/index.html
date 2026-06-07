@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>zing-cdn</title>
+  <style>
+    body { margin: 0; background: #fafafa; }
+    button { cursor: pointer; padding: 6px 14px; border: 1px solid #888; border-radius: 6px; background: #fff; font-size: 0.85rem; }
+    button:hover { background: #eee; }
+    input { padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; width: 100%; box-sizing: border-box; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid #ddd; }
+    pre { background: #f4f4f4; padding: 12px; border-radius: 6px; overflow-x: auto; }
+    code { font-size: 0.8rem; }
+    .card { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 16px; }
+  </style>
+</head>
+<body>
+  <div id="main"></div>
+  <script type="module">
+    import init from '/target/wasm32-unknown-unknown/release/zing_cdn_gui.js';
+    init('/target/wasm32-unknown-unknown/release/zing_cdn_gui_bg.wasm');
+  </script>
+</body>
+</html>

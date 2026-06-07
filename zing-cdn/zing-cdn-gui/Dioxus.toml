@@ -1,0 +1,10 @@
+[application]
+name = "zing-cdn"
+author = ""
+version = "0.1.0"
+build = "../.dioxus/dist"
+
+[web.app]
+title = "zing-cdn"
+base_path = "/"
+assets_dir = "public"
