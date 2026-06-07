@@ -13,6 +13,7 @@ use walrus_sui::client::retry_client::RetriableSuiClient;
 use walrus_sui::client::SuiReadClient;
 
 use crate::p2p::node::P2pCommand;
+use crate::sui::SuiClient;
 use crate::types::{ZingError, ZingResult};
 use crate::walrus::client::WalrusL3Client;
 
@@ -87,6 +88,11 @@ impl ZingClient {
 
     pub fn sui_read_client(&self) -> &SuiReadClient {
         self.walrus_client.sui_client()
+    }
+
+    /// Returns a SuiClient wrapper sharing the underlying SuiReadClient.
+    pub fn sui_client(&self) -> SuiClient {
+        SuiClient::new(Arc::new(self.sui_read_client().clone()))
     }
 
     pub async fn read_blob(&self, blob_id: &BlobId) -> ZingResult<Vec<u8>> {

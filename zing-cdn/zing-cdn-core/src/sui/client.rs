@@ -1,26 +1,34 @@
-// ZingError will be used when SuiClient methods are implemented
-// during integration with the Walrus SuiReadClient.
+use std::sync::Arc;
 
-/// SuiClient wraps the walrus-sui SuiReadClient for on-chain data access.
+use walrus_sdk::ObjectID;
+use walrus_sui::client::SuiReadClient;
+
+/// Thin wrapper around a shared SuiReadClient for on-chain data access.
 ///
-/// In the MVP, this provides:
-/// - Epoch/committee info (for checking blob expiry)
-/// - Article object reads (for blob metadata lookup)
-///
-/// The SuiReadClient is created by the WalrusNodeClient and can be
-/// accessed via `WalrusNodeClient::sui_client()`.
+/// Delegates to walrus_sui's read client for:
+/// - System/staking object IDs
+/// - Epoch and committee info
+/// - Blob status checks (via higher-level WalrusL3Client)
+#[derive(Clone)]
 pub struct SuiClient {
-    // The SuiReadClient comes from the WalrusNodeClient.
-    // We'll hold a reference to it or create it alongside.
-    // For now, we use the walrus-sui types directly.
-    inner: std::marker::PhantomData<()>,
+    inner: Arc<SuiReadClient>,
 }
 
 impl SuiClient {
-    pub fn new() -> Self {
-        Self {
-            inner: std::marker::PhantomData,
-        }
+    pub fn new(inner: Arc<SuiReadClient>) -> Self {
+        Self { inner }
+    }
+
+    pub fn inner(&self) -> &SuiReadClient {
+        &self.inner
+    }
+
+    pub fn system_object_id(&self) -> ObjectID {
+        self.inner.system_object_id()
+    }
+
+    pub fn staking_object_id(&self) -> ObjectID {
+        self.inner.staking_object_id()
     }
 }
 

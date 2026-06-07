@@ -79,7 +79,7 @@ impl PeerReputationTable {
     }
 
     pub fn is_blacklisted(&self, peer_id: &str) -> bool {
-        self.scores.get(peer_id).map_or(false, |s| s.score <= BLACKLIST_THRESHOLD)
+        self.scores.get(peer_id).is_some_and(|s| s.score <= BLACKLIST_THRESHOLD)
     }
 
     fn apply_decay(entry: &mut PeerScore) {
