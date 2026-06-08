@@ -173,9 +173,13 @@ impl ZingP2pNode {
             P2pCommand::Dial { peer_id, addr } => {
                 let mut dial_addr = addr.clone();
                 dial_addr.push(libp2p::multiaddr::Protocol::P2p(peer_id));
+                eprintln!("P2P dialing {peer_id} at {dial_addr}");
                 match swarm.dial(dial_addr) {
                     Ok(()) => tracing::info!(%peer_id, "dialing peer"),
-                    Err(e) => tracing::warn!(error = %e, %peer_id, "dial failed"),
+                    Err(e) => {
+                        tracing::warn!(error = %e, %peer_id, "dial failed");
+                        eprintln!("P2P dial failed: {e}");
+                    }
                 }
             }
         }
@@ -201,20 +205,24 @@ impl ZingP2pNode {
             }
             SwarmEvent::NewListenAddr { address, .. } => {
                 tracing::info!(%address, "P2P listening");
+                eprintln!("P2P listening on {address}");
             }
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                 tracing::info!(%peer_id, "P2P connection established");
+                eprintln!("P2P connected to {peer_id}");
             }
             SwarmEvent::ConnectionClosed {
                 peer_id, cause, ..
             } => {
                 tracing::info!(peer_id = %peer_id, cause = ?cause, "P2P connection closed");
+                eprintln!("P2P disconnected from {peer_id}: {cause:?}");
             }
             SwarmEvent::Dialing { peer_id, .. } => {
                 tracing::info!(peer_id = ?peer_id, "P2P dialing peer");
             }
             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                 tracing::warn!(peer_id = ?peer_id, %error, "P2P outgoing connection failed");
+                eprintln!("P2P dial error to {peer_id:?}: {error}");
             }
             SwarmEvent::IncomingConnection { .. } => {}
             _ => {}

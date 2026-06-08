@@ -157,6 +157,9 @@ pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInf
         (text, String::new())
     };
 
+    // Announce blob via P2P DHT so peers can discover it
+    let _ = state.p2p_tx.send(P2pCommand::AnnounceBlob { blob_id: id.0 }).await;
+
     Ok(BlobInfo {
         blob_id: blob_id.to_string(),
         size: data.len() as u64,
