@@ -17,6 +17,47 @@ use crate::api_http::HttpApiState;
 
 const CACHE_BUDGET: u64 = 500 * 1024 * 1024;
 
+fn peers_file_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".zing-cdn")
+        .join("peers.json")
+}
+
+fn load_peers() -> Vec<String> {
+    let path = peers_file_path();
+    if let Ok(data) = std::fs::read_to_string(&path) {
+        serde_json::from_str(&data).unwrap_or_default()
+    } else {
+        vec![]
+    }
+}
+
+fn save_peers(peers: &[String]) {
+    let path = peers_file_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    if let Ok(json) = serde_json::to_string(peers) {
+        std::fs::write(path, json).ok();
+    }
+}
+
+fn parse_bootstrap_peers(peers: &[String]) -> Vec<(libp2p::PeerId, Multiaddr)> {
+    use libp2p::multiaddr::Protocol;
+    peers.iter().filter_map(|s| {
+        let addr: Multiaddr = s.parse().ok()?;
+        let peer_id = addr.iter().find_map(|p| {
+            if let Protocol::P2p(peer) = p {
+                Some(peer)
+            } else {
+                None
+            }
+        })?;
+        Some((peer_id, addr))
+    }).collect()
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|_app| {
@@ -46,6 +87,10 @@ fn main() {
                 CACHE_BUDGET,
             )));
 
+            let peers_str = load_peers();
+            let bootstrap_addrs = parse_bootstrap_peers(&peers_str);
+            let bootstrap_peers = Arc::new(RwLock::new(peers_str));
+
             let api_state = HttpApiState {
                 store: store.clone(),
                 pinning: Arc::clone(&pinning),
@@ -53,6 +98,7 @@ fn main() {
                 p2p_tx: p2p_tx.clone(),
                 peer_id,
                 listen_addr: listen_addr.clone(),
+                bootstrap_peers: bootstrap_peers.clone(),
             };
 
             // Build axum router with CORS (localhost app — permissive)
@@ -64,6 +110,9 @@ fn main() {
                 .route("/api/pin", routing::get(handle_pin))
                 .route("/api/unpin", routing::get(handle_unpin))
                 .route("/api/delete", routing::get(handle_delete))
+                .route("/api/peers", routing::get(handle_peers_list))
+                .route("/api/peers/add", routing::post(handle_peers_add))
+                .route("/api/peers/remove", routing::post(handle_peers_remove))
                 .layer(cors)
                 .with_state(api_state);
 
@@ -78,10 +127,10 @@ fn main() {
                 axum::serve(listener, app_router).await.ok();
             });
 
-            // Spawn P2P background task
+            // Spawn P2P background task with loaded bootstrap peers
             tauri::async_runtime::spawn(async move {
                 let _ = ZingP2pNode::run(
-                    p2p_key, command_rx, store, listen_addr, vec![],
+                    p2p_key, command_rx, store, listen_addr, bootstrap_addrs,
                 ).await;
             });
 
@@ -134,6 +183,46 @@ async fn handle_unpin(State(state): State<HttpApiState>, Query(q): Query<BlobIdQ
 async fn handle_delete(State(state): State<HttpApiState>, Query(q): Query<BlobIdQuery>) -> Json<serde_json::Value> {
     match api_http::delete_blob(&state, &q.blob_id).await {
         Ok(()) => Json(serde_json::json!({"ok": true})),
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+#[derive(Deserialize)]
+struct AddrRequest {
+    addr: String,
+}
+
+async fn handle_peers_list(State(state): State<HttpApiState>) -> Json<serde_json::Value> {
+    match api_http::peers_list(&state).await {
+        Ok(info) => Json(serde_json::to_value(info).unwrap()),
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_peers_add(
+    State(state): State<HttpApiState>,
+    Json(body): Json<AddrRequest>,
+) -> Json<serde_json::Value> {
+    match api_http::peers_add(&state, &body.addr).await {
+        Ok(()) => {
+            let peers = state.bootstrap_peers.read().await.clone();
+            save_peers(&peers);
+            Json(serde_json::json!({"ok": true}))
+        }
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_peers_remove(
+    State(state): State<HttpApiState>,
+    Json(body): Json<AddrRequest>,
+) -> Json<serde_json::Value> {
+    match api_http::peers_remove(&state, &body.addr).await {
+        Ok(()) => {
+            let peers = state.bootstrap_peers.read().await.clone();
+            save_peers(&peers);
+            Json(serde_json::json!({"ok": true}))
+        }
         Err(e) => Json(serde_json::json!({"error": e})),
     }
 }

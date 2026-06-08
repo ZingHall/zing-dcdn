@@ -92,3 +92,39 @@ pub struct CacheEntry {
     pub size: u64,
     pub pinned: bool,
 }
+
+#[derive(serde::Deserialize, Clone)]
+pub struct PeersInfo {
+    pub bootstrap: Vec<String>,
+    pub connected: Vec<String>,
+}
+
+pub async fn list_peers() -> Result<PeersInfo, String> {
+    invoke_cmd::<PeersInfo>("peers", {}).await
+}
+
+pub async fn add_peer(addr: &str) -> Result<(), String> {
+    let url = format!("{}/api/peers/add", base_url());
+    let body = serde_json::json!({"addr": addr});
+    Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&body).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("http error: {e}"))?
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    Ok(())
+}
+
+pub async fn remove_peer(addr: &str) -> Result<(), String> {
+    let url = format!("{}/api/peers/remove", base_url());
+    let body = serde_json::json!({"addr": addr});
+    Request::post(&url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::to_string(&body).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("http error: {e}"))?
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    Ok(())
+}

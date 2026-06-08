@@ -8,6 +8,7 @@ enum Tab {
     Dashboard,
     BlobBrowser,
     Cache,
+    Settings,
 }
 
 #[component]
@@ -17,6 +18,7 @@ pub fn App() -> Element {
     use crate::components::dashboard::Dashboard;
     use crate::components::blob::BlobBrowser;
     use crate::components::cache::Cache;
+    use crate::components::settings::Settings;
 
     rsx! {
         div { class: "app",
@@ -38,12 +40,18 @@ pub fn App() -> Element {
                     style: if tab() == Tab::Cache { "font-weight: bold" } else { "" },
                     "Cache"
                 }
+                button {
+                    onclick: move |_| tab.set(Tab::Settings),
+                    style: if tab() == Tab::Settings { "font-weight: bold" } else { "" },
+                    "⚙"
+                }
             }
             div { class: "content",
                 match tab() {
                     Tab::Dashboard => rsx! { Dashboard {} },
                     Tab::BlobBrowser => rsx! { BlobBrowser {} },
                     Tab::Cache => rsx! { Cache {} },
+                    Tab::Settings => rsx! { Settings {} },
                 }
             }
         }

@@ -16,6 +16,7 @@ pub struct HttpApiState {
     pub p2p_tx: mpsc::Sender<P2pCommand>,
     pub peer_id: PeerId,
     pub listen_addr: Multiaddr,
+    pub bootstrap_peers: Arc<RwLock<Vec<String>>>,
 }
 
 const CACHE_BUDGET: u64 = 500 * 1024 * 1024;
@@ -162,4 +163,53 @@ pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInf
         mime_type: mime_type.to_string(),
         data_base64,
     })
+}
+
+#[derive(Serialize)]
+pub struct PeersInfo {
+    pub bootstrap: Vec<String>,
+    pub connected: Vec<String>,
+}
+
+pub async fn peers_list(state: &HttpApiState) -> Result<PeersInfo, String> {
+    let (reply, rx) = oneshot::channel();
+    state.p2p_tx.send(P2pCommand::GetConnectedPeers { reply }).await.map_err(|e| e.to_string())?;
+    let connected = rx.await.map_err(|e| e.to_string())?;
+
+    let bootstrap = state.bootstrap_peers.read().await.clone();
+
+    Ok(PeersInfo {
+        bootstrap,
+        connected: connected.iter().map(|p| p.to_string()).collect(),
+    })
+}
+
+pub async fn peers_add(state: &HttpApiState, addr_str: &str) -> Result<(), String> {
+    use libp2p::multiaddr::Protocol;
+
+    let addr: Multiaddr = addr_str.parse().map_err(|e| format!("invalid multiaddr: {e}"))?;
+    let mut peer_id = None;
+    for proto in addr.iter() {
+        if let Protocol::P2p(peer) = proto {
+            peer_id = Some(peer);
+            break;
+        }
+    }
+    let peer_id = peer_id.ok_or("multiaddr must contain /p2p/ protocol")?;
+
+    state.p2p_tx.send(P2pCommand::AddBootstrapPeer { peer_id, addr: addr.clone() }).await.map_err(|e| e.to_string())?;
+    state.p2p_tx.send(P2pCommand::Dial { peer_id, addr }).await.map_err(|e| e.to_string())?;
+
+    let mut peers = state.bootstrap_peers.write().await;
+    if !peers.contains(&addr_str.to_string()) {
+        peers.push(addr_str.to_string());
+    }
+
+    Ok(())
+}
+
+pub async fn peers_remove(state: &HttpApiState, addr_str: &str) -> Result<(), String> {
+    let mut peers = state.bootstrap_peers.write().await;
+    peers.retain(|p| p != addr_str);
+    Ok(())
 }
