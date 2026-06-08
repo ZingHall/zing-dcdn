@@ -13,13 +13,17 @@ pub fn Settings() -> Element {
     let guard = peers_info.read();
     let info = match &*guard {
         Some(Some(p)) => p.clone(),
-        _ => ipc::PeersInfo { bootstrap: vec![], connected: vec![], listen_addr: "loading...".into(), cache_dir: "loading...".into() },
+        _ => ipc::PeersInfo {
+            bootstrap: vec![], connected: vec![], listen_addr: "loading...".into(),
+            cache_dir: "loading...".into(), peer_id: "loading...".into(), p2p_addr: "loading...".into(),
+        },
     };
     drop(guard);
 
     let status_text = status.read().clone();
     let listen = info.listen_addr.clone();
     let cache = info.cache_dir.clone();
+    let p2p_addr = info.p2p_addr.clone();
 
     rsx! {
         div { style: "display: flex; flex-direction: column; gap: 16px;",
@@ -97,13 +101,16 @@ pub fn Settings() -> Element {
             div { class: "card",
                 h3 { style: "margin: 0 0 8px 0;", "Info" }
                 p { style: "font-size: 0.85rem;",
+                    b { "Your P2P address: " }
+                }
+                div { style: "background: #f0f0f0; padding: 8px 12px; border-radius: 4px; margin-bottom: 8px;",
+                    code { style: "font-size: 0.7rem; word-break: break-all; user-select: all;", "{p2p_addr}" }
+                }
+                p { style: "font-size: 0.85rem;",
                     b { "Cache: " } "{cache} (500 MB)"
                 }
                 p { style: "font-size: 0.85rem;",
-                    b { "P2P listen: " } "{listen}"
-                }
-                p { style: "font-size: 0.85rem;",
-                    b { "API port: " } "13420"
+                    b { "Listen: " } "{listen}"
                 }
             }
         }

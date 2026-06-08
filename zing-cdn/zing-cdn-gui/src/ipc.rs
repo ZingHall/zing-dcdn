@@ -99,6 +99,8 @@ pub struct PeersInfo {
     pub connected: Vec<String>,
     pub listen_addr: String,
     pub cache_dir: String,
+    pub peer_id: String,
+    pub p2p_addr: String,
 }
 
 pub async fn list_peers() -> Result<PeersInfo, String> {

@@ -173,6 +173,8 @@ pub struct PeersInfo {
     pub connected: Vec<String>,
     pub listen_addr: String,
     pub cache_dir: String,
+    pub peer_id: String,
+    pub p2p_addr: String,
 }
 
 pub async fn peers_list(state: &HttpApiState) -> Result<PeersInfo, String> {
@@ -181,12 +183,15 @@ pub async fn peers_list(state: &HttpApiState) -> Result<PeersInfo, String> {
     let connected = rx.await.map_err(|e| e.to_string())?;
 
     let bootstrap = state.bootstrap_peers.read().await.clone();
+    let p2p_addr = format!("/ip4/127.0.0.1/udp/{}/quic-v1/p2p/{}", state.p2p_port, state.peer_id);
 
     Ok(PeersInfo {
         bootstrap,
         connected: connected.iter().map(|p| p.to_string()).collect(),
         listen_addr: state.listen_addr.to_string(),
         cache_dir: state.cache_dir.display().to_string(),
+        peer_id: state.peer_id.to_string(),
+        p2p_addr,
     })
 }
 
