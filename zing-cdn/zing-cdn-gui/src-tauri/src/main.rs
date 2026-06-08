@@ -54,13 +54,15 @@ fn main() {
                 listen_addr: listen_addr.clone(),
             };
 
-            // Build axum router
+            // Build axum router with CORS (localhost app — permissive)
+            let cors = tower_http::cors::CorsLayer::permissive();
             let app_router = axum::Router::new()
                 .route("/api/dashboard", routing::get(handle_dashboard))
                 .route("/api/cache", routing::get(handle_list_cache))
                 .route("/api/pin", routing::get(handle_pin))
                 .route("/api/unpin", routing::get(handle_unpin))
                 .route("/api/delete", routing::get(handle_delete))
+                .layer(cors)
                 .with_state(api_state);
 
             eprintln!("HTTP API binding to 127.0.0.1:13420");

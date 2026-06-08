@@ -15515,6 +15515,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tokio",
+ "tower-http 0.6.11",
  "walrus-core",
  "zing-cdn-core",
 ]
