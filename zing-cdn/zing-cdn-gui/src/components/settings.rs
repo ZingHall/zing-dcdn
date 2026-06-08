@@ -13,11 +13,13 @@ pub fn Settings() -> Element {
     let guard = peers_info.read();
     let info = match &*guard {
         Some(Some(p)) => p.clone(),
-        _ => ipc::PeersInfo { bootstrap: vec![], connected: vec![] },
+        _ => ipc::PeersInfo { bootstrap: vec![], connected: vec![], listen_addr: "loading...".into(), cache_dir: "loading...".into() },
     };
     drop(guard);
 
     let status_text = status.read().clone();
+    let listen = info.listen_addr.clone();
+    let cache = info.cache_dir.clone();
 
     rsx! {
         div { style: "display: flex; flex-direction: column; gap: 16px;",
@@ -95,10 +97,10 @@ pub fn Settings() -> Element {
             div { class: "card",
                 h3 { style: "margin: 0 0 8px 0;", "Info" }
                 p { style: "font-size: 0.85rem;",
-                    b { "Cache: " } "~/.zing-cdn/cache (500 MB)"
+                    b { "Cache: " } "{cache} (500 MB)"
                 }
                 p { style: "font-size: 0.85rem;",
-                    b { "P2P listen: " } "/ip4/0.0.0.0/udp/34291/quic-v1"
+                    b { "P2P listen: " } "{listen}"
                 }
                 p { style: "font-size: 0.85rem;",
                     b { "API port: " } "13420"

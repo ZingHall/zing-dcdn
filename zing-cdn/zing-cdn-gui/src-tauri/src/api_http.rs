@@ -17,6 +17,8 @@ pub struct HttpApiState {
     pub peer_id: PeerId,
     pub listen_addr: Multiaddr,
     pub bootstrap_peers: Arc<RwLock<Vec<String>>>,
+    pub cache_dir: std::path::PathBuf,
+    pub p2p_port: u16,
 }
 
 const CACHE_BUDGET: u64 = 500 * 1024 * 1024;
@@ -169,6 +171,8 @@ pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInf
 pub struct PeersInfo {
     pub bootstrap: Vec<String>,
     pub connected: Vec<String>,
+    pub listen_addr: String,
+    pub cache_dir: String,
 }
 
 pub async fn peers_list(state: &HttpApiState) -> Result<PeersInfo, String> {
@@ -181,6 +185,8 @@ pub async fn peers_list(state: &HttpApiState) -> Result<PeersInfo, String> {
     Ok(PeersInfo {
         bootstrap,
         connected: connected.iter().map(|p| p.to_string()).collect(),
+        listen_addr: state.listen_addr.to_string(),
+        cache_dir: state.cache_dir.display().to_string(),
     })
 }
 

@@ -97,6 +97,8 @@ pub struct CacheEntry {
 pub struct PeersInfo {
     pub bootstrap: Vec<String>,
     pub connected: Vec<String>,
+    pub listen_addr: String,
+    pub cache_dir: String,
 }
 
 pub async fn list_peers() -> Result<PeersInfo, String> {

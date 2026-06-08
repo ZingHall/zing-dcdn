@@ -61,11 +61,23 @@ fn parse_bootstrap_peers(peers: &[String]) -> Vec<(libp2p::PeerId, Multiaddr)> {
 fn main() {
     tauri::Builder::default()
         .setup(|_app| {
-            let cache_dir = dirs::home_dir()
-                .unwrap_or_default()
-                .join(".zing-cdn")
-                .join("cache");
+            let cache_dir = std::env::var("ZING_CACHE_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| {
+                    dirs::home_dir()
+                        .unwrap_or_default()
+                        .join(".zing-cdn")
+                        .join("cache")
+                });
             std::fs::create_dir_all(&cache_dir).expect("create cache dir");
+
+            let p2p_port: u16 = std::env::var("ZING_P2P_PORT")
+                .unwrap_or_else(|_| "34291".into())
+                .parse()
+                .unwrap_or(34291);
+            let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/udp/{p2p_port}/quic-v1")
+                .parse()
+                .expect("valid listen addr");
 
             let store = Arc::new(RwLock::new(
                 BlobStore::open(&cache_dir).expect("open blob store"),
@@ -75,9 +87,6 @@ fn main() {
             let p2p_tx = p2p_node.command_tx().clone();
             let p2p_key = p2p_node.key().clone();
             let peer_id = p2p_node.local_peer_id();
-            let listen_addr: Multiaddr = "/ip4/0.0.0.0/udp/34291/quic-v1"
-                .parse()
-                .expect("valid listen addr");
 
             let pinning = Arc::new(RwLock::new(PinningManager::new(
                 store.blocking_read().clone(),
@@ -99,6 +108,8 @@ fn main() {
                 peer_id,
                 listen_addr: listen_addr.clone(),
                 bootstrap_peers: bootstrap_peers.clone(),
+                cache_dir: cache_dir.clone(),
+                p2p_port,
             };
 
             // Build axum router with CORS (localhost app — permissive)
