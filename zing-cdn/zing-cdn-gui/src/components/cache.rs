@@ -15,6 +15,19 @@ pub fn Cache() -> Element {
     let is_empty = list.is_empty();
     drop(guard);
 
+    // Auto-refresh every 5 seconds
+    {
+        let mut entries = entries.clone();
+        use_effect(move || {
+            spawn(async move {
+                loop {
+                    gloo_timers::future::TimeoutFuture::new(5000).await;
+                    entries.restart();
+                }
+            });
+        });
+    }
+
     rsx! {
         div { class: "card",
             h3 { "Cached Blobs" }

@@ -26,6 +26,19 @@ pub fn Dashboard() -> Element {
     };
     drop(guard);
 
+    // Auto-refresh every 3 seconds
+    {
+        let mut info = info.clone();
+        use_effect(move || {
+            spawn(async move {
+                loop {
+                    gloo_timers::future::TimeoutFuture::new(3000).await;
+                    info.restart();
+                }
+            });
+        });
+    }
+
     rsx! {
         div { style: "display: flex; flex-direction: column; gap: 16px;",
             div { class: "card",
