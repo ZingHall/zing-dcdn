@@ -16,9 +16,24 @@ fn base_url() -> String {
 
 pub async fn invoke_cmd<T: DeserializeOwned>(
     cmd: &str,
-    _args: impl Serialize,
+    args: impl Serialize,
 ) -> Result<T, String> {
-    let url = format!("{}/api/{}", base_url(), cmd);
+    let args_value = serde_json::to_value(&args).map_err(|e| e.to_string())?;
+    let mut query = String::new();
+    if let Some(obj) = args_value.as_object() {
+        for (i, (k, v)) in obj.iter().enumerate() {
+            if i == 0 { query.push('?'); } else { query.push('&'); }
+            query.push_str(k);
+            query.push('=');
+            // URL-encode the value (simple: just use the string representation)
+            let val = match v {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            query.push_str(&val);
+        }
+    }
+    let url = format!("{}/api/{}{query}", base_url(), cmd);
 
     log(&format!("GET {url}"));
     let response = Request::get(&url)

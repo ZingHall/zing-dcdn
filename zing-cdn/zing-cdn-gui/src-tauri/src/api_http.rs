@@ -5,12 +5,14 @@ use serde::Serialize;
 
 use zing_cdn_core::cache::store::BlobStore;
 use zing_cdn_core::cache::pinning::PinningManager;
+use zing_cdn_core::cache::eviction::EvictionManager;
 use zing_cdn_core::p2p::P2pCommand;
 
 #[derive(Clone)]
 pub struct HttpApiState {
     pub store: Arc<RwLock<BlobStore>>,
     pub pinning: Arc<RwLock<PinningManager>>,
+    pub eviction: Arc<RwLock<EvictionManager>>,
     pub p2p_tx: mpsc::Sender<P2pCommand>,
     pub peer_id: PeerId,
     pub listen_addr: Multiaddr,
@@ -77,4 +79,50 @@ pub async fn unpin_blob(state: &HttpApiState, blob_id: &str) -> Result<(), Strin
 
 pub async fn delete_blob(state: &HttpApiState, blob_id: &str) -> Result<(), String> {
     state.store.write().await.delete(blob_id).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+pub struct BlobInfo {
+    pub blob_id: String,
+    pub size: u64,
+    pub source: String,
+    pub cached: bool,
+}
+
+pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInfo, String> {
+    use zing_cdn_core::client::ZingClient;
+    use zing_cdn_core::mesh::resolver::Resolver;
+    use zing_cdn_core::mesh::reputation::PeerReputationTable;
+    use zing_cdn_core::walrus::verify::BlobVerifier;
+    use walrus_core::BlobId;
+
+    let id: BlobId = blob_id.parse().map_err(|e| format!("invalid blob id: {blob_id}: {e}"))?;
+
+    let client = ZingClient::from_mainnet().await.map_err(|e| e.to_string())?;
+    let verifier = Arc::new(BlobVerifier::new(client.encoding_config_arc()));
+
+    let mut resolver = Resolver::new(
+        state.store.clone(),
+        state.pinning.clone(),
+        state.eviction.clone(),
+        client.walrus_client_arc(),
+        verifier,
+        Arc::new(RwLock::new(PeerReputationTable::new())),
+    );
+    resolver.set_p2p_channel(state.p2p_tx.clone());
+
+    let result = resolver.resolve(&id).await.map_err(|e| e.to_string())?;
+
+    let source = match result.resolution {
+        zing_cdn_core::types::BlobResolution::LocalCache => "L0 local cache",
+        zing_cdn_core::types::BlobResolution::L1Peer => "L1 peer",
+        zing_cdn_core::types::BlobResolution::L3Walrus => "L3 Walrus",
+    };
+
+    Ok(BlobInfo {
+        blob_id: blob_id.to_string(),
+        size: result.data.len() as u64,
+        source: source.to_string(),
+        cached: result.cached,
+    })
 }

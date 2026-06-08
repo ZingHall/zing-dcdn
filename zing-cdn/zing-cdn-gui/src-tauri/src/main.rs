@@ -41,7 +41,7 @@ fn main() {
             let pinning = Arc::new(RwLock::new(PinningManager::new(
                 store.blocking_read().clone(),
             )));
-            let _eviction = Arc::new(RwLock::new(EvictionManager::new(
+            let eviction = Arc::new(RwLock::new(EvictionManager::new(
                 store.blocking_read().clone(),
                 CACHE_BUDGET,
             )));
@@ -49,6 +49,7 @@ fn main() {
             let api_state = HttpApiState {
                 store: store.clone(),
                 pinning: Arc::clone(&pinning),
+                eviction,
                 p2p_tx: p2p_tx.clone(),
                 peer_id,
                 listen_addr: listen_addr.clone(),
@@ -59,6 +60,7 @@ fn main() {
             let app_router = axum::Router::new()
                 .route("/api/dashboard", routing::get(handle_dashboard))
                 .route("/api/cache", routing::get(handle_list_cache))
+                .route("/api/resolve_blob", routing::get(handle_resolve))
                 .route("/api/pin", routing::get(handle_pin))
                 .route("/api/unpin", routing::get(handle_unpin))
                 .route("/api/delete", routing::get(handle_delete))
@@ -104,6 +106,13 @@ async fn handle_dashboard(State(state): State<HttpApiState>) -> Json<serde_json:
 async fn handle_list_cache(State(state): State<HttpApiState>) -> Json<serde_json::Value> {
     match api_http::list_cache(&state).await {
         Ok(entries) => Json(serde_json::to_value(entries).unwrap()),
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_resolve(State(state): State<HttpApiState>, Query(q): Query<BlobIdQuery>) -> Json<serde_json::Value> {
+    match api_http::resolve_blob(&state, &q.blob_id).await {
+        Ok(info) => Json(serde_json::to_value(info).unwrap()),
         Err(e) => Json(serde_json::json!({"error": e})),
     }
 }
