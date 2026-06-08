@@ -8,3 +8,6 @@ build = "../.dioxus/dist"
 title = "zing-cdn"
 base_path = "/"
 assets_dir = "public"
+
+[web.watcher]
+enabled = false

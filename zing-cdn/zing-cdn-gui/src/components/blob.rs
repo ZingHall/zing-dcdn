@@ -8,6 +8,7 @@ struct BlobInfo {
     size: u64,
     source: String,
     cached: bool,
+    content: String,
 }
 
 #[component]
@@ -15,6 +16,8 @@ pub fn BlobBrowser() -> Element {
     let mut input = use_signal(|| String::new());
     let mut info = use_signal(|| None::<BlobInfo>);
     let mut err = use_signal(|| None::<String>);
+
+    let blob_info = info.read().clone();
 
     rsx! {
         div { style: "display: grid; grid-template-columns: 1fr 1fr; gap: 16px;",
@@ -43,7 +46,7 @@ pub fn BlobBrowser() -> Element {
                     style: "margin-top: 8px;",
                     "Fetch"
                 }
-                if let Some(ref i) = *info.read() {
+                if let Some(ref i) = blob_info {
                     div { style: "margin-top: 12px;",
                         p { b { "Blob: " } code { "{i.blob_id}" } }
                         p { b { "Size: " } "{i.size} bytes" }
@@ -57,7 +60,18 @@ pub fn BlobBrowser() -> Element {
             }
             div { class: "card",
                 h3 { "Preview" }
-                p { style: "color: #999;", "Fetch a blob to preview content" }
+                if let Some(ref i) = blob_info {
+                    pre { style: "white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; max-height: 400px; overflow-y: auto;",
+                        "{i.content}"
+                    }
+                    if i.size > 2000 {
+                        p { style: "font-size: 0.8rem; color: #888;",
+                            "{i.size} bytes total (showing first 2000 characters)"
+                        }
+                    }
+                } else {
+                    p { style: "color: #999;", "Fetch a blob to preview content" }
+                }
             }
         }
     }

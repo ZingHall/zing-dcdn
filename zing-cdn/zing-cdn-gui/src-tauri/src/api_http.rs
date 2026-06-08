@@ -87,6 +87,7 @@ pub struct BlobInfo {
     pub size: u64,
     pub source: String,
     pub cached: bool,
+    pub content: String,
 }
 
 pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInfo, String> {
@@ -119,10 +120,17 @@ pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInf
         zing_cdn_core::types::BlobResolution::L3Walrus => "L3 Walrus",
     };
 
+    let content = if result.data.len() > 2000 {
+        format!("{}...", String::from_utf8_lossy(&result.data[..2000]))
+    } else {
+        String::from_utf8_lossy(&result.data).to_string()
+    };
+
     Ok(BlobInfo {
         blob_id: blob_id.to_string(),
         size: result.data.len() as u64,
         source: source.to_string(),
         cached: result.cached,
+        content,
     })
 }
