@@ -10,8 +10,26 @@ extern "C" {
 
 const API_PORT: u16 = 13420;
 
+fn get_api_port() -> u16 {
+    // window.__ZING_API_PORT__ is injected by the build command (env var ZING_API_PORT)
+    // Fall back to 13420 if not set (e.g. when loading outside Tauri context)
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(window) = web_sys::window() {
+            let port_js = js_sys::Reflect::get(&window, &wasm_bindgen::JsValue::from_str("__ZING_API_PORT__"))
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(API_PORT as f64) as u16;
+            if port_js > 0 {
+                return port_js;
+            }
+        }
+    }
+    API_PORT
+}
+
 fn base_url() -> String {
-    format!("http://127.0.0.1:{API_PORT}")
+    format!("http://127.0.0.1:{}", get_api_port())
 }
 
 pub async fn invoke_cmd<T: DeserializeOwned>(

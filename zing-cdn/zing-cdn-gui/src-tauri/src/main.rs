@@ -75,9 +75,15 @@ fn main() {
                 .unwrap_or_else(|_| "34291".into())
                 .parse()
                 .unwrap_or(34291);
+            let api_port: u16 = std::env::var("ZING_API_PORT")
+                .unwrap_or_else(|_| "13420".into())
+                .parse()
+                .unwrap_or(13420);
             let listen_addr: Multiaddr = format!("/ip4/0.0.0.0/udp/{p2p_port}/quic-v1")
                 .parse()
                 .expect("valid listen addr");
+
+            eprintln!("P2P port: {p2p_port}, API port: {api_port}, cache: {}", cache_dir.display());
 
             let store = Arc::new(RwLock::new(
                 BlobStore::open(&cache_dir).expect("open blob store"),
@@ -110,6 +116,7 @@ fn main() {
                 bootstrap_peers: bootstrap_peers.clone(),
                 cache_dir: cache_dir.clone(),
                 p2p_port,
+                api_port,
             };
 
             // Build axum router with CORS (localhost app — permissive)
@@ -127,14 +134,15 @@ fn main() {
                 .layer(cors)
                 .with_state(api_state);
 
-            eprintln!("HTTP API binding to 127.0.0.1:13420");
+            eprintln!("HTTP API binding to 127.0.0.1:{api_port}");
 
             // Start axum in tokio
+            let bind_addr = format!("127.0.0.1:{api_port}");
             tauri::async_runtime::spawn(async move {
-                let listener = tokio::net::TcpListener::bind("127.0.0.1:13420")
+                let listener = tokio::net::TcpListener::bind(&bind_addr)
                     .await
-                    .expect("bind http api on 127.0.0.1:13420");
-                eprintln!("HTTP API listening on 127.0.0.1:13420");
+                    .expect(&format!("bind http api on {bind_addr}"));
+                eprintln!("HTTP API listening on {bind_addr}");
                 axum::serve(listener, app_router).await.ok();
             });
 

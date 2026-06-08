@@ -19,6 +19,7 @@ pub struct HttpApiState {
     pub bootstrap_peers: Arc<RwLock<Vec<String>>>,
     pub cache_dir: std::path::PathBuf,
     pub p2p_port: u16,
+    pub api_port: u16,
 }
 
 const CACHE_BUDGET: u64 = 500 * 1024 * 1024;
