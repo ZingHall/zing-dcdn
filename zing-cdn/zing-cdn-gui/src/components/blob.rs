@@ -9,6 +9,8 @@ struct BlobInfo {
     source: String,
     cached: bool,
     content: String,
+    mime_type: String,
+    data_base64: String,
 }
 
 #[component]
@@ -18,6 +20,15 @@ pub fn BlobBrowser() -> Element {
     let mut err = use_signal(|| None::<String>);
 
     let blob_info = info.read().clone();
+
+    let is_image = blob_info.as_ref().map(|i| i.mime_type.starts_with("image/")).unwrap_or(false);
+    let img_src = blob_info.as_ref().map(|i| {
+        if i.mime_type.starts_with("image/") && !i.data_base64.is_empty() {
+            format!("data:{};base64,{}", i.mime_type, i.data_base64)
+        } else {
+            String::new()
+        }
+    }).unwrap_or_default();
 
     rsx! {
         div { style: "display: grid; grid-template-columns: 1fr 1fr; gap: 16px;",
@@ -60,13 +71,19 @@ pub fn BlobBrowser() -> Element {
             }
             div { class: "card",
                 h3 { "Preview" }
-                if let Some(ref i) = blob_info {
+                if is_image && !img_src.is_empty() {
+                    img {
+                        src: "{img_src}",
+                        style: "max-width: 100%; max-height: 500px; border-radius: 6px;",
+                        alt: "Blob image preview"
+                    }
+                } else if let Some(ref i) = blob_info {
                     pre { style: "white-space: pre-wrap; word-break: break-all; font-size: 0.8rem; max-height: 400px; overflow-y: auto;",
                         "{i.content}"
                     }
                     if i.size > 2000 {
                         p { style: "font-size: 0.8rem; color: #888;",
-                            "{i.size} bytes total (showing first 2000 characters)"
+                            "{i.size} bytes total"
                         }
                     }
                 } else {

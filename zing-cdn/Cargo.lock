@@ -15507,6 +15507,7 @@ name = "zing-cdn-gui"
 version = "0.1.0"
 dependencies = [
  "axum 0.8.4",
+ "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
  "libp2p",

@@ -17,6 +17,7 @@ tokio = { version = "1", features = ["sync", "rt", "macros", "net"] }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors"] }
 chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22"
 libp2p = { version = "0.54", features = ["tokio", "quic", "kad", "gossipsub", "noise", "tcp", "yamux", "macros", "request-response", "identify", "ping"] }
 dirs = "5"
 

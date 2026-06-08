@@ -88,6 +88,19 @@ pub struct BlobInfo {
     pub source: String,
     pub cached: bool,
     pub content: String,
+    pub mime_type: String,
+    pub data_base64: String,
+}
+
+fn detect_mime(data: &[u8]) -> &'static str {
+    if data.len() < 4 {
+        return "application/octet-stream";
+    }
+    if data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) { "image/png" }
+    else if data.starts_with(&[0xFF, 0xD8, 0xFF]) { "image/jpeg" }
+    else if data.starts_with(&[0x47, 0x49, 0x46, 0x38]) { "image/gif" }
+    else if data.len() > 8 && &data[0..4] == b"RIFF" && &data[8..12] == b"WEBP" { "image/webp" }
+    else { "text/plain" }
 }
 
 pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInfo, String> {
@@ -113,6 +126,7 @@ pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInf
     resolver.set_p2p_channel(state.p2p_tx.clone());
 
     let result = resolver.resolve(&id).await.map_err(|e| e.to_string())?;
+    let data = &result.data;
 
     let source = match result.resolution {
         zing_cdn_core::types::BlobResolution::LocalCache => "L0 local cache",
@@ -120,17 +134,33 @@ pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInf
         zing_cdn_core::types::BlobResolution::L3Walrus => "L3 Walrus",
     };
 
-    let content = if result.data.len() > 2000 {
-        format!("{}...", String::from_utf8_lossy(&result.data[..2000]))
+    let mime_type = detect_mime(data);
+
+    let (content, data_base64) = if mime_type.starts_with("image/") {
+        let preview_size = data.len().min(512 * 1024); // cap at 512KB
+        (
+            format!("[Binary image — {} bytes]", data.len()),
+            base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                &data[..preview_size],
+            ),
+        )
     } else {
-        String::from_utf8_lossy(&result.data).to_string()
+        let text = if data.len() > 2000 {
+            format!("{}...", String::from_utf8_lossy(&data[..2000]))
+        } else {
+            String::from_utf8_lossy(data).to_string()
+        };
+        (text, String::new())
     };
 
     Ok(BlobInfo {
         blob_id: blob_id.to_string(),
-        size: result.data.len() as u64,
+        size: data.len() as u64,
         source: source.to_string(),
         cached: result.cached,
         content,
+        mime_type: mime_type.to_string(),
+        data_base64,
     })
 }
