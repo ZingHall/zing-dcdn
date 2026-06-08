@@ -137,12 +137,11 @@ pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInf
     let mime_type = detect_mime(data);
 
     let (content, data_base64) = if mime_type.starts_with("image/") {
-        let preview_size = data.len().min(512 * 1024); // cap at 512KB
         (
             format!("[Binary image — {} bytes]", data.len()),
             base64::Engine::encode(
                 &base64::engine::general_purpose::STANDARD,
-                &data[..preview_size],
+                data,
             ),
         )
     } else {
