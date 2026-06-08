@@ -11,17 +11,17 @@ extern "C" {
 const API_PORT: u16 = 13420;
 
 fn get_api_port() -> u16 {
-    // window.__ZING_API_PORT__ is injected by the build command (env var ZING_API_PORT)
-    // Fall back to 13420 if not set (e.g. when loading outside Tauri context)
-    #[cfg(target_arch = "wasm32")]
-    {
-        if let Some(window) = web_sys::window() {
-            let port_js = js_sys::Reflect::get(&window, &wasm_bindgen::JsValue::from_str("__ZING_API_PORT__"))
-                .ok()
-                .and_then(|v| v.as_f64())
-                .unwrap_or(API_PORT as f64) as u16;
-            if port_js > 0 {
-                return port_js;
+    // Read data-api-port from <html> tag, injected at build time via ZING_API_PORT env var
+    if let Some(window) = web_sys::window() {
+        if let Some(doc) = window.document() {
+            if let Some(html) = doc.document_element() {
+                if let Some(val) = html.get_attribute("data-api-port") {
+                    if let Ok(p) = val.parse::<u16>() {
+                        if p > 0 {
+                            return p;
+                        }
+                    }
+                }
             }
         }
     }
