@@ -13,7 +13,8 @@ walrus-core = { workspace = true }
 tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["sync", "rt", "macros"] }
+tokio = { version = "1", features = ["sync", "rt", "macros", "net"] }
+axum = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 libp2p = { version = "0.54", features = ["tokio", "quic", "kad", "gossipsub", "noise", "tcp", "yamux", "macros", "request-response", "identify", "ping"] }
 dirs = "5"

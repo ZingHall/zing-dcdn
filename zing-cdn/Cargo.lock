@@ -810,6 +810,7 @@ dependencies = [
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -849,6 +850,7 @@ dependencies = [
  "sync_wrapper",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -15504,6 +15506,7 @@ dependencies = [
 name = "zing-cdn-gui"
 version = "0.1.0"
 dependencies = [
+ "axum 0.8.4",
  "chrono",
  "dirs 5.0.1",
  "libp2p",
