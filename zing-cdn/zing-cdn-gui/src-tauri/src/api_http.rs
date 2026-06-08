@@ -208,8 +208,13 @@ pub async fn peers_add(state: &HttpApiState, addr_str: &str) -> Result<(), Strin
     }
     let peer_id = peer_id.ok_or("multiaddr must contain /p2p/ protocol")?;
 
-    state.p2p_tx.send(P2pCommand::AddBootstrapPeer { peer_id, addr: addr.clone() }).await.map_err(|e| e.to_string())?;
-    state.p2p_tx.send(P2pCommand::Dial { peer_id, addr }).await.map_err(|e| e.to_string())?;
+    // Strip /p2p/ suffix — the Dial handler in node.rs adds it back
+    // to avoid double /p2p/ stacking
+    let mut addr_no_p2p = addr.clone();
+    addr_no_p2p.pop();
+
+    state.p2p_tx.send(P2pCommand::AddBootstrapPeer { peer_id, addr: addr_no_p2p.clone() }).await.map_err(|e| e.to_string())?;
+    state.p2p_tx.send(P2pCommand::Dial { peer_id, addr: addr_no_p2p }).await.map_err(|e| e.to_string())?;
 
     let mut peers = state.bootstrap_peers.write().await;
     if !peers.contains(&addr_str.to_string()) {
