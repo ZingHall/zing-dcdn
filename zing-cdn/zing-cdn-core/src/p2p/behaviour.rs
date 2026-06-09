@@ -8,12 +8,12 @@ use libp2p::StreamProtocol;
 use std::time::Duration;
 
 use crate::p2p::handler::BlobStoreHandle;
-use crate::p2p::protocol::JsonProtocolCodec;
+use crate::p2p::protocol::BinaryProtocolCodec;
 
 #[derive(NetworkBehaviour)]
 pub struct ZingBehaviour {
     pub kad: kad::Behaviour<MemoryStore>,
-    pub data: request_response::Behaviour<JsonProtocolCodec>,
+    pub data: request_response::Behaviour<BinaryProtocolCodec>,
     pub identify: identify::Behaviour,
     pub ping: ping::Behaviour,
 }
@@ -29,7 +29,7 @@ impl ZingBehaviour {
         let data_cfg = request_response::Config::default()
             .with_request_timeout(Duration::from_secs(30));
         let data = request_response::Behaviour::new(
-            vec![("/zing-cdn/data/1.0", request_response::ProtocolSupport::Full)],
+            vec![("/zing-cdn/data/2.0", request_response::ProtocolSupport::Full)],
             data_cfg,
         );
 
