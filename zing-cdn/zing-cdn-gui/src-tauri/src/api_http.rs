@@ -1,8 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
+use std::convert::Infallible;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use libp2p::{PeerId, Multiaddr};
 use serde::Serialize;
+use axum::response::sse::Event;
 
 use zing_cdn_core::cache::store::BlobStore;
 use zing_cdn_core::cache::pinning::PinningManager;
@@ -171,6 +173,105 @@ pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInf
         mime_type: mime_type.to_string(),
         data_base64,
     })
+}
+
+fn build_blobinfo(blob_id: &str, data: &[u8], source: &str, cached: bool) -> BlobInfo {
+    let mime_type = detect_mime(data);
+    let (content, data_base64) = if mime_type.starts_with("image/") {
+        (
+            format!("[Binary image — {} bytes]", data.len()),
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
+        )
+    } else {
+        let text = if data.len() > 2000 {
+            format!("{}...", String::from_utf8_lossy(&data[..2000]))
+        } else {
+            String::from_utf8_lossy(data).to_string()
+        };
+        (text, String::new())
+    };
+    BlobInfo {
+        blob_id: blob_id.to_string(),
+        size: data.len() as u64,
+        source: source.to_string(),
+        cached,
+        content,
+        mime_type: mime_type.to_string(),
+        data_base64,
+    }
+}
+
+pub async fn resolve_blob_with_progress(
+    state: &HttpApiState,
+    blob_id: &str,
+    tx: tokio::sync::mpsc::UnboundedSender<Result<Event, Infallible>>,
+) {
+    use zing_cdn_core::client::ZingClient;
+    use zing_cdn_core::mesh::resolver::Resolver;
+    use zing_cdn_core::mesh::reputation::PeerReputationTable;
+    use zing_cdn_core::walrus::verify::BlobVerifier;
+    use walrus_core::BlobId;
+
+    let ev = |v: serde_json::Value| Ok(Event::default().data(v.to_string()));
+    let send = |v: serde_json::Value| { let _ = tx.send(ev(v)); };
+    let send_err = |msg: &str| {
+        send(serde_json::json!({"type":"error","error":msg}));
+    };
+
+    let id: BlobId = match blob_id.parse() {
+        Ok(id) => id,
+        Err(e) => { send_err(&format!("invalid blob id: {e}")); return; }
+    };
+
+    send(serde_json::json!({"type":"status","status":"Checking local cache...","layer":"L0"}));
+    {
+        let store = state.store.read().await;
+        if let Ok(Some(data)) = store.get(blob_id) {
+            let info = build_blobinfo(blob_id, &data, "L0 local cache", true);
+            send(serde_json::json!({"type":"result","info":{
+                "blob_id": info.blob_id, "size": info.size, "source": info.source,
+                "cached": info.cached, "content": info.content, "mime_type": info.mime_type,
+                "data_base64": info.data_base64
+            }}));
+            return;
+        }
+    }
+
+    send(serde_json::json!({"type":"status","status":"Searching P2P network...","layer":"L1"}));
+
+    let client = match ZingClient::from_mainnet().await {
+        Ok(c) => c,
+        Err(e) => { send_err(&e.to_string()); return; }
+    };
+    let verifier = Arc::new(BlobVerifier::new(client.encoding_config_arc()));
+    let mut resolver = Resolver::new(
+        state.store.clone(),
+        state.pinning.clone(),
+        state.eviction.clone(),
+        client.walrus_client_arc(),
+        verifier,
+        Arc::new(RwLock::new(PeerReputationTable::new())),
+    );
+    resolver.set_p2p_channel(state.p2p_tx.clone());
+
+    match resolver.resolve(&id).await {
+        Ok(result) => {
+            let source = match result.resolution {
+                zing_cdn_core::types::BlobResolution::LocalCache => "L0 local cache",
+                zing_cdn_core::types::BlobResolution::L1Peer => "L1 peer",
+                zing_cdn_core::types::BlobResolution::L3Walrus => "L3 Walrus",
+            };
+            send(serde_json::json!({"type":"status","status":format!("Resolved via {source}"),"layer":&source[..2],"source":source}));
+            let info = build_blobinfo(blob_id, &result.data, source, result.cached);
+            let _ = state.p2p_tx.send(P2pCommand::AnnounceBlob { blob_id: id.0 }).await;
+            send(serde_json::json!({"type":"result","info":{
+                "blob_id": info.blob_id, "size": info.size, "source": info.source,
+                "cached": info.cached, "content": info.content, "mime_type": info.mime_type,
+                "data_base64": info.data_base64
+            }}));
+        }
+        Err(e) => send_err(&e.to_string()),
+    }
 }
 
 #[derive(Serialize)]

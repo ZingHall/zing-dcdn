@@ -39,7 +39,7 @@ fn get_api_port() -> u16 {
     API_PORT
 }
 
-fn base_url() -> String {
+pub fn base_url() -> String {
     format!("http://127.0.0.1:{}", get_api_port())
 }
 

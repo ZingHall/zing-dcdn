@@ -7,8 +7,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tauri::Manager;
 use libp2p::{Multiaddr, identity};
-use axum::{routing, Json, extract::{State, Query}};
+use axum::{routing, Json, extract::{State, Query}, response::sse::{Event, Sse}};
 use serde::Deserialize;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use zing_cdn_core::cache::store::BlobStore;
 use zing_cdn_core::cache::pinning::PinningManager;
@@ -131,6 +132,7 @@ fn main() {
                 .route("/api/dashboard", routing::get(handle_dashboard))
                 .route("/api/cache", routing::get(handle_list_cache))
                 .route("/api/resolve_blob", routing::get(handle_resolve))
+                .route("/api/resolve_blob_stream", routing::get(handle_resolve_stream))
                 .route("/api/pin", routing::get(handle_pin))
                 .route("/api/unpin", routing::get(handle_unpin))
                 .route("/api/delete", routing::get(handle_delete))
@@ -193,6 +195,21 @@ async fn handle_resolve(State(state): State<HttpApiState>, Query(q): Query<BlobI
         Ok(info) => Json(serde_json::to_value(info).unwrap()),
         Err(e) => Json(serde_json::json!({"error": e})),
     }
+}
+
+async fn handle_resolve_stream(
+    State(state): State<HttpApiState>,
+    Query(q): Query<BlobIdQuery>,
+) -> Sse<UnboundedReceiverStream<Result<Event, std::convert::Infallible>>> {
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    let state_clone = state.clone();
+    let blob_id = q.blob_id.clone();
+
+    tokio::spawn(async move {
+        api_http::resolve_blob_with_progress(&state_clone, &blob_id, tx).await;
+    });
+
+    Sse::new(UnboundedReceiverStream::new(rx))
 }
 
 async fn handle_pin(State(state): State<HttpApiState>, Query(q): Query<BlobIdQuery>) -> Json<serde_json::Value> {

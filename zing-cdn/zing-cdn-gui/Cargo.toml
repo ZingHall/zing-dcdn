@@ -20,4 +20,4 @@ serde_json = "1"
 serde-wasm-bindgen = "0.6"
 gloo-net = "0.7"
 gloo-timers = { version = "0.3", features = ["futures"] }
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlDocument", "HtmlElement"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlDocument", "HtmlElement", "EventSource", "Event", "MessageEvent"] }
