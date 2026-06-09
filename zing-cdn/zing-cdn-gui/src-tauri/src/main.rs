@@ -2,6 +2,7 @@
 
 mod api_http;
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tauri::Manager;
@@ -18,15 +19,8 @@ use crate::api_http::HttpApiState;
 
 const CACHE_BUDGET: u64 = 500 * 1024 * 1024;
 
-fn keypair_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join(".zing-cdn")
-        .join("keypair")
-}
-
-fn load_or_generate_keypair() -> identity::Keypair {
-    let path = keypair_path();
+fn load_or_generate_keypair(cache_dir: &Path) -> identity::Keypair {
+    let path = cache_dir.join("keypair");
     if let Ok(data) = std::fs::read(&path) {
         if let Ok(kp) = identity::Keypair::from_protobuf_encoding(&data) {
             return kp;
@@ -34,22 +28,12 @@ fn load_or_generate_keypair() -> identity::Keypair {
     }
     let kp = identity::Keypair::generate_ed25519();
     let data = kp.to_protobuf_encoding().expect("serialize keypair");
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
     std::fs::write(path, &data).ok();
     kp
 }
 
-fn peers_file_path() -> std::path::PathBuf {
-    dirs::home_dir()
-        .unwrap_or_default()
-        .join(".zing-cdn")
-        .join("peers.json")
-}
-
-fn load_peers() -> Vec<String> {
-    let path = peers_file_path();
+fn load_peers(cache_dir: &Path) -> Vec<String> {
+    let path = cache_dir.join("peers.json");
     if let Ok(data) = std::fs::read_to_string(&path) {
         serde_json::from_str(&data).unwrap_or_default()
     } else {
@@ -57,11 +41,8 @@ fn load_peers() -> Vec<String> {
     }
 }
 
-fn save_peers(peers: &[String]) {
-    let path = peers_file_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
+fn save_peers(peers: &[String], cache_dir: &Path) {
+    let path = cache_dir.join("peers.json");
     if let Ok(json) = serde_json::to_string(peers) {
         std::fs::write(path, json).ok();
     }
@@ -113,7 +94,7 @@ fn main() {
                 BlobStore::open(&cache_dir).expect("open blob store"),
             ));
 
-            let keypair = load_or_generate_keypair();
+            let keypair = load_or_generate_keypair(&cache_dir);
             let (p2p_node, command_rx) = ZingP2pNode::new(store.clone(), keypair);
             let p2p_tx = p2p_node.command_tx().clone();
             let p2p_key = p2p_node.key().clone();
@@ -127,7 +108,7 @@ fn main() {
                 CACHE_BUDGET,
             )));
 
-            let peers_str = load_peers();
+            let peers_str = load_peers(&cache_dir);
             let bootstrap_addrs = parse_bootstrap_peers(&peers_str);
             let bootstrap_peers = Arc::new(RwLock::new(peers_str));
 
@@ -178,10 +159,9 @@ fn main() {
                 ).await;
             });
 
-            app.get_webview_window("main")
-                .unwrap()
-                .eval(&format!("window.ZING_API_PORT = {api_port};"))
-                .ok();
+            let window = app.get_webview_window("main").unwrap();
+            window.eval(&format!("window.ZING_API_PORT = {api_port};")).ok();
+            window.set_title(&format!("zing-cdn :{api_port}")).ok();
 
             Ok(())
         })
@@ -255,7 +235,7 @@ async fn handle_peers_add(
     match api_http::peers_add(&state, &body.addr).await {
         Ok(()) => {
             let peers = state.bootstrap_peers.read().await.clone();
-            save_peers(&peers);
+            save_peers(&peers, &state.cache_dir);
             Json(serde_json::json!({"ok": true}))
         }
         Err(e) => Json(serde_json::json!({"error": e})),
@@ -269,7 +249,7 @@ async fn handle_peers_remove(
     match api_http::peers_remove(&state, &body.addr).await {
         Ok(()) => {
             let peers = state.bootstrap_peers.read().await.clone();
-            save_peers(&peers);
+            save_peers(&peers, &state.cache_dir);
             Json(serde_json::json!({"ok": true}))
         }
         Err(e) => Json(serde_json::json!({"error": e})),

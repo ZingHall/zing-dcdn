@@ -15463,7 +15463,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
- "dirs 5.0.1",
  "libp2p",
  "serde",
  "serde_json",

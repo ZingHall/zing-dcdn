@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
     let cache_eviction = Arc::new(RwLock::new(eviction));
 
     let store_handle = cache_store.clone();
-    let keypair = load_or_generate_keypair();
+    let keypair = load_or_generate_keypair(&cache_dir);
     eprintln!("P2P keypair loaded (peer_id: {})", keypair.public().to_peer_id());
     let (p2p_node, command_rx) = ZingP2pNode::new(store_handle, keypair);
     let p2p_peer_id = p2p_node.local_peer_id();
@@ -189,13 +189,8 @@ fn parse_bootstrap_peers(inputs: &[String]) -> Vec<(libp2p::PeerId, Multiaddr)> 
         .collect()
 }
 
-fn keypair_path() -> std::path::PathBuf {
-    let home = dirs::home_dir().unwrap_or_default();
-    home.join(".zing-cdn").join("keypair")
-}
-
-fn load_or_generate_keypair() -> identity::Keypair {
-    let path = keypair_path();
+fn load_or_generate_keypair(cache_dir: &PathBuf) -> identity::Keypair {
+    let path = cache_dir.join("keypair");
     if let Ok(data) = std::fs::read(&path) {
         if let Ok(kp) = identity::Keypair::from_protobuf_encoding(&data) {
             return kp;
@@ -203,9 +198,6 @@ fn load_or_generate_keypair() -> identity::Keypair {
     }
     let kp = identity::Keypair::generate_ed25519();
     let data = kp.to_protobuf_encoding().expect("serialize keypair");
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
     std::fs::write(path, &data).ok();
     kp
 }
