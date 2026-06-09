@@ -75,7 +75,7 @@ impl ZingP2pNode {
             .with_quic()
             .with_behaviour(move |key| ZingBehaviour::new(key, store_for_builder))
             .map_err(|e| ZingError::P2PNetwork(e.to_string()))?
-            .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(30)))
+            .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(300)))
             .build();
 
         swarm
