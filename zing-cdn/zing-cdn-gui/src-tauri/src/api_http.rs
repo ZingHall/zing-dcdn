@@ -20,6 +20,7 @@ pub struct HttpApiState {
     pub bootstrap_peers: Arc<RwLock<Vec<String>>>,
     pub cache_dir: std::path::PathBuf,
     pub p2p_port: u16,
+    #[allow(dead_code)]
     pub api_port: u16,
 }
 

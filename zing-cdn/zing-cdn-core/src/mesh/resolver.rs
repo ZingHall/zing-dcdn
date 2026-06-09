@@ -89,16 +89,13 @@ impl Resolver {
         blob_id_hex: &str,
         tx: &mpsc::Sender<P2pCommand>,
     ) -> Option<ZingResult<ResolveResult>> {
-        eprintln!("L1: looking up DHT providers for {blob_id_hex}");
 
         let peers = Self::run_find_providers(tx, blob_id).await;
 
         let peers = if peers.is_empty() {
-            eprintln!("L1: DHT returned empty, retrying in 2s...");
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
             let retry = Self::run_find_providers(tx, blob_id).await;
             if retry.is_empty() {
-                eprintln!("L1: retry also empty, trying direct connected peers");
                 return self.try_direct_peers(blob_id, blob_id_hex, tx).await;
             }
             retry
@@ -107,7 +104,6 @@ impl Resolver {
         };
 
         if peers.is_empty() {
-            eprintln!("L1: no providers found in DHT for {blob_id_hex}");
             return None;
         }
 
@@ -118,11 +114,8 @@ impl Resolver {
         };
 
         if !Self::ensure_connected(tx, &peer).await {
-            eprintln!("L1: peer {peer} not connected, falling back to direct peers");
             return self.try_direct_peers(blob_id, blob_id_hex, tx).await;
         }
-
-        eprintln!("L1: fetching blob {blob_id_hex} from peer {peer}");
 
         let (fetch_reply, fetch_rx) = tokio::sync::oneshot::channel();
         if tx.send(P2pCommand::FetchBlob {
@@ -155,12 +148,10 @@ impl Resolver {
             return None;
         }
         let connected: Vec<PeerId> = rx.await.unwrap_or(vec![]);
-        eprintln!("L1: {} connected peer(s) available", connected.len());
         if connected.is_empty() {
             return None;
         }
         for peer in &connected {
-            eprintln!("L1: trying direct FetchBlob from {peer}");
             let (fetch_reply, fetch_rx) = tokio::sync::oneshot::channel();
             if tx.send(P2pCommand::FetchBlob {
                 peer_id: *peer,
@@ -171,14 +162,11 @@ impl Resolver {
             }
             match tokio::time::timeout(Duration::from_secs(30), fetch_rx).await {
                 Ok(Ok(Ok(data))) => {
-                    eprintln!("L1: got blob from direct peer {peer}");
                     return self.finalize_l1_fetch(
                         blob_id, blob_id_hex, *peer, data,
                     ).await;
                 }
-                _ => {
-                    eprintln!("L1: direct fetch from {peer} failed, trying next");
-                }
+                _ => continue,
             }
         }
         None
@@ -197,7 +185,6 @@ impl Resolver {
             return true;
         }
 
-        eprintln!("L1: dialing peer {peer} before fetch...");
         let mut addr = Multiaddr::empty();
         addr.push(Protocol::P2p(*peer));
         let _ = tx.send(P2pCommand::Dial { peer_id: *peer, addr }).await;
@@ -274,7 +261,7 @@ impl Resolver {
         Some(Ok(ResolveResult {
             data,
             resolution: BlobResolution::L1Peer,
-            cached: false,
+            cached: true,
         }))
     }
 
@@ -297,7 +284,7 @@ impl Resolver {
         Ok(ResolveResult {
             data,
             resolution: BlobResolution::L3Walrus,
-            cached: false,
+            cached: true,
         })
     }
 

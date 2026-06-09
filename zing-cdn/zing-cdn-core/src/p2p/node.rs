@@ -133,9 +133,8 @@ impl ZingP2pNode {
         match cmd {
             P2pCommand::AnnounceBlob { blob_id } => {
                 let key = kad::RecordKey::new(&blob_id);
-                match swarm.behaviour_mut().kad.start_providing(key) {
-                    Ok(_) => eprintln!("Kad start_providing ok (blob {:02x?})", &blob_id[..4]),
-                    Err(e) => eprintln!("Kad start_providing FAILED: {e}"),
+                if let Err(e) = swarm.behaviour_mut().kad.start_providing(key) {
+                    eprintln!("Kad start_providing FAILED: {e}");
                 }
             }
             P2pCommand::FindProviders { blob_id, reply } => {
@@ -162,10 +161,8 @@ impl ZingP2pNode {
                 swarm.behaviour_mut().kad.add_address(&peer_id, addr);
             }
             P2pCommand::Bootstrap => {
-                eprintln!("Kad bootstrap requested");
-                match swarm.behaviour_mut().kad.bootstrap() {
-                    Ok(query_id) => eprintln!("Kad bootstrap started (query_id: {query_id:?})"),
-                    Err(e) => eprintln!("Kad bootstrap FAILED: {e}"),
+                if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
+                    eprintln!("Kad bootstrap FAILED: {e}");
                 }
             }
             P2pCommand::GetConnectedPeers { reply } => {
@@ -175,7 +172,6 @@ impl ZingP2pNode {
             P2pCommand::Dial { peer_id, addr } => {
                 let mut dial_addr = addr.clone();
                 dial_addr.push(libp2p::multiaddr::Protocol::P2p(peer_id));
-                eprintln!("P2P dialing {peer_id} at {dial_addr}");
                 match swarm.dial(dial_addr) {
                     Ok(()) => tracing::info!(%peer_id, "dialing peer"),
                     Err(e) => {
@@ -247,12 +243,10 @@ impl ZingP2pNode {
                                 kad::GetProvidersOk::FoundProviders { providers, .. } => {
                                     if let Some(sender) = pending_finds.remove(&id) {
                                         let peers: Vec<PeerId> = providers.into_iter().collect();
-                                        eprintln!("Kad GetProviders found {} providers: {peers:?}", peers.len());
                                         let _ = sender.send(peers);
                                     }
                                 }
                                 kad::GetProvidersOk::FinishedWithNoAdditionalRecord { .. } => {
-                                    eprintln!("Kad GetProviders finished with no providers");
                                     if let Some(sender) = pending_finds.remove(&id) {
                                         let _ = sender.send(vec![]);
                                     }
@@ -260,15 +254,13 @@ impl ZingP2pNode {
                             }
                         }
                         kad::QueryResult::GetProviders(Err(e)) => {
-                            eprintln!("Kad GetProviders error: {e}");
+                            tracing::warn!(?id, %e, "get_providers query failed");
                             if let Some(sender) = pending_finds.remove(&id) {
                                 let _ = sender.send(vec![]);
                             }
                         }
                         _ => {}
                     }
-                } else {
-                    eprintln!("Kad event (not OutboundQueryProgressed): {kad_event:?}");
                 }
             }
             ZingBehaviourEvent::Data(data_event) => {
