@@ -15,6 +15,7 @@ use zing_cdn_core::cache::store::BlobStore;
 use zing_cdn_core::cache::pinning::PinningManager;
 use zing_cdn_core::cache::eviction::EvictionManager;
 use zing_cdn_core::p2p::node::ZingP2pNode;
+use zing_cdn_core::client::ZingClient;
 
 use crate::api_http::HttpApiState;
 
@@ -101,6 +102,11 @@ fn main() {
             let p2p_key = p2p_node.key().clone();
             let peer_id = p2p_node.local_peer_id();
 
+            let client = Arc::new(
+                tauri::async_runtime::block_on(ZingClient::from_mainnet())
+                    .expect("connect to Walrus mainnet"),
+            );
+
             let pinning = Arc::new(RwLock::new(PinningManager::new(
                 store.blocking_read().clone(),
             )));
@@ -124,6 +130,7 @@ fn main() {
                 cache_dir: cache_dir.clone(),
                 p2p_port,
                 api_port,
+                client,
             };
 
             // Build axum router with CORS (localhost app — permissive)

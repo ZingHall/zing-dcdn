@@ -10,6 +10,7 @@ use zing_cdn_core::cache::store::BlobStore;
 use zing_cdn_core::cache::pinning::PinningManager;
 use zing_cdn_core::cache::eviction::EvictionManager;
 use zing_cdn_core::p2p::P2pCommand;
+use zing_cdn_core::client::ZingClient;
 
 #[derive(Clone)]
 pub struct HttpApiState {
@@ -24,6 +25,7 @@ pub struct HttpApiState {
     pub p2p_port: u16,
     #[allow(dead_code)]
     pub api_port: u16,
+    pub client: Arc<ZingClient>,
 }
 
 const CACHE_BUDGET: u64 = 500 * 1024 * 1024;
@@ -112,7 +114,6 @@ fn detect_mime(data: &[u8]) -> &'static str {
 }
 
 pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInfo, String> {
-    use zing_cdn_core::client::ZingClient;
     use zing_cdn_core::mesh::resolver::Resolver;
     use zing_cdn_core::mesh::reputation::PeerReputationTable;
     use zing_cdn_core::walrus::verify::BlobVerifier;
@@ -120,14 +121,13 @@ pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInf
 
     let id: BlobId = blob_id.parse().map_err(|e| format!("invalid blob id: {blob_id}: {e}"))?;
 
-    let client = ZingClient::from_mainnet().await.map_err(|e| e.to_string())?;
-    let verifier = Arc::new(BlobVerifier::new(client.encoding_config_arc()));
+    let verifier = Arc::new(BlobVerifier::new(state.client.encoding_config_arc()));
 
     let mut resolver = Resolver::new(
         state.store.clone(),
         state.pinning.clone(),
         state.eviction.clone(),
-        client.walrus_client_arc(),
+        state.client.walrus_client_arc(),
         verifier,
         Arc::new(RwLock::new(PeerReputationTable::new())),
     );
@@ -206,7 +206,6 @@ pub async fn resolve_blob_with_progress(
     blob_id: &str,
     tx: tokio::sync::mpsc::UnboundedSender<Result<Event, Infallible>>,
 ) {
-    use zing_cdn_core::client::ZingClient;
     use zing_cdn_core::mesh::resolver::Resolver;
     use zing_cdn_core::mesh::reputation::PeerReputationTable;
     use zing_cdn_core::walrus::verify::BlobVerifier;
@@ -239,16 +238,12 @@ pub async fn resolve_blob_with_progress(
 
     send(serde_json::json!({"type":"status","status":"Searching P2P network...","layer":"L1"}));
 
-    let client = match ZingClient::from_mainnet().await {
-        Ok(c) => c,
-        Err(e) => { send_err(&e.to_string()); return; }
-    };
-    let verifier = Arc::new(BlobVerifier::new(client.encoding_config_arc()));
+    let verifier = Arc::new(BlobVerifier::new(state.client.encoding_config_arc()));
     let mut resolver = Resolver::new(
         state.store.clone(),
         state.pinning.clone(),
         state.eviction.clone(),
-        client.walrus_client_arc(),
+        state.client.walrus_client_arc(),
         verifier,
         Arc::new(RwLock::new(PeerReputationTable::new())),
     );

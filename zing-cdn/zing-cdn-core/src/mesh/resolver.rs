@@ -92,16 +92,9 @@ impl Resolver {
 
         let peers = Self::run_find_providers(tx, blob_id).await;
 
-        let peers = if peers.is_empty() {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            let retry = Self::run_find_providers(tx, blob_id).await;
-            if retry.is_empty() {
-                return self.try_direct_peers(blob_id, blob_id_hex, tx).await;
-            }
-            retry
-        } else {
-            peers
-        };
+        if peers.is_empty() {
+            return self.try_direct_peers(blob_id, blob_id_hex, tx).await;
+        }
 
         if peers.is_empty() {
             return None;
@@ -189,8 +182,8 @@ impl Resolver {
         addr.push(Protocol::P2p(*peer));
         let _ = tx.send(P2pCommand::Dial { peer_id: *peer, addr }).await;
 
-        for _ in 0..15 {
-            tokio::time::sleep(Duration::from_millis(300)).await;
+        for _ in 0..10 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
             let (reply, rx) = tokio::sync::oneshot::channel();
             if tx.send(P2pCommand::GetConnectedPeers { reply }).await.is_err() {
                 break;
@@ -215,7 +208,7 @@ impl Resolver {
         }).await.is_err() {
             return vec![];
         }
-        tokio::time::timeout(Duration::from_secs(5), rx)
+        tokio::time::timeout(Duration::from_secs(2), rx)
             .await
             .unwrap_or(Ok(vec![]))
             .unwrap_or(vec![])
