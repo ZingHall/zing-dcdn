@@ -7,6 +7,7 @@ use crate::mesh::reputation::PeerReputationTable;
 use crate::types::{ZingResult, BlobResolution};
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
 use libp2p::{PeerId, Multiaddr};
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
@@ -89,12 +90,18 @@ impl Resolver {
         blob_id_hex: &str,
         tx: &mpsc::Sender<P2pCommand>,
     ) -> Option<ZingResult<ResolveResult>> {
+        let t0 = Instant::now();
 
         if let Some(result) = self.try_direct_peers(blob_id, blob_id_hex, tx).await {
+            eprintln!("L1: resolve_from_l1 done via try_direct_peers in {:?}", t0.elapsed());
             return Some(result);
         }
 
+        eprintln!("L1: try_direct_peers returned None after {:?}, running FindProviders", t0.elapsed());
+
         let peers = Self::run_find_providers(tx, blob_id).await;
+
+        eprintln!("L1: FindProviders done in {:?}, got {} peers", t0.elapsed(), peers.len());
 
         if peers.is_empty() {
             return self.try_direct_peers(blob_id, blob_id_hex, tx).await;
@@ -131,6 +138,8 @@ impl Resolver {
             }
         };
 
+        eprintln!("L1: FetchBlob got data in {:?}, finalizing", t0.elapsed());
+
         self.finalize_l1_fetch(blob_id, blob_id_hex, peer, data).await
     }
 
@@ -146,9 +155,12 @@ impl Resolver {
         }
         let connected: Vec<PeerId> = rx.await.unwrap_or(vec![]);
         if connected.is_empty() {
+            eprintln!("L1: try_direct_peers — no connected peers");
             return None;
         }
+        eprintln!("L1: try_direct_peers — {} connected peers", connected.len());
         for peer in &connected {
+            let t_peer = Instant::now();
             let (fetch_reply, fetch_rx) = tokio::sync::oneshot::channel();
             if tx.send(P2pCommand::FetchBlob {
                 peer_id: *peer,
@@ -159,11 +171,15 @@ impl Resolver {
             }
             match tokio::time::timeout(Duration::from_secs(30), fetch_rx).await {
                 Ok(Ok(Ok(data))) => {
+                    eprintln!("L1: try_direct_peers — peer {peer} responded with {} bytes in {:?}", data.len(), t_peer.elapsed());
                     return self.finalize_l1_fetch(
                         blob_id, blob_id_hex, *peer, data,
                     ).await;
                 }
-                _ => continue,
+                _ => {
+                    eprintln!("L1: try_direct_peers — peer {peer} failed/timed out after {:?}", t_peer.elapsed());
+                    continue;
+                }
             }
         }
         None
@@ -224,21 +240,28 @@ impl Resolver {
         peer: PeerId,
         data: Vec<u8>,
     ) -> Option<ZingResult<ResolveResult>> {
+        let t0 = Instant::now();
+
         let metadata = match self.walrus_client.fetch_metadata(blob_id).await {
-            Ok(m) => m,
+            Ok(m) => {
+                eprintln!("L1: fetch_metadata done in {:?}", t0.elapsed());
+                m
+            }
             Err(e) => {
                 tracing::warn!(blob_id = %blob_id_hex, error = %e, "L1: metadata fetch failed");
-                eprintln!("L1: metadata fetch failed: {e}");
+                eprintln!("L1: metadata fetch failed after {:?}: {e}", t0.elapsed());
                 return None;
             }
         };
 
         if let Err(e) = self.verifier.verify_blob_against_metadata(&metadata, &data) {
             tracing::warn!(blob_id = %blob_id_hex, error = %e, "L1: verification failed");
-            eprintln!("L1: verification failed: {e}");
+            eprintln!("L1: verification failed after {:?}: {e}", t0.elapsed());
             self.reputation.write().await.record_corruption(&peer.to_string());
             return None;
         }
+
+        eprintln!("L1: verification passed in {:?}", t0.elapsed());
 
         {
             let store = self.store.write().await;
@@ -246,13 +269,16 @@ impl Resolver {
                 eprintln!("L1: cache write failed: {e}");
             }
         }
+
+        eprintln!("L1: cache write done in {:?}", t0.elapsed());
+
         {
             let pinning = self.pinning.read().await;
             let _ = self.eviction.write().await.run(&pinning);
         }
 
         self.reputation.write().await.record_success(&peer.to_string());
-        eprintln!("L1: SUCCESS — blob fetched and verified from peer {peer}");
+        eprintln!("L1: SUCCESS — blob fetched and verified from peer {peer} — total {:?}", t0.elapsed());
 
         Some(Ok(ResolveResult {
             data,
