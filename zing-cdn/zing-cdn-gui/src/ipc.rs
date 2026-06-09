@@ -70,9 +70,19 @@ pub async fn invoke_cmd<T: DeserializeOwned>(
         .await
         .map_err(|e| format!("http error: {e}"))?;
 
-    response
-        .json::<T>()
+    let raw = response
+        .text()
         .await
+        .map_err(|e| format!("http error: {e}"))?;
+
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("json error: {e}"))?;
+
+    if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(msg.to_string());
+    }
+
+    serde_json::from_value::<T>(value)
         .map_err(|e| format!("json error: {e}"))
 }
 
