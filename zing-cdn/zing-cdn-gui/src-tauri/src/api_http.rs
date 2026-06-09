@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use libp2p::{PeerId, Multiaddr};
 use serde::Serialize;
@@ -219,6 +220,19 @@ pub async fn peers_add(state: &HttpApiState, addr_str: &str) -> Result<(), Strin
 
     state.p2p_tx.send(P2pCommand::AddBootstrapPeer { peer_id, addr: addr_no_p2p.clone() }).await.map_err(|e| e.to_string())?;
     state.p2p_tx.send(P2pCommand::Dial { peer_id, addr: addr_no_p2p }).await.map_err(|e| e.to_string())?;
+
+    for _ in 0..15 {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let (reply, rx) = oneshot::channel();
+        if state.p2p_tx.send(P2pCommand::GetConnectedPeers { reply }).await.is_err() {
+            break;
+        }
+        if let Ok(connected) = rx.await {
+            if connected.contains(&peer_id) {
+                break;
+            }
+        }
+    }
 
     let mut peers = state.bootstrap_peers.write().await;
     if !peers.contains(&addr_str.to_string()) {
