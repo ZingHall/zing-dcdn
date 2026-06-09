@@ -5,7 +5,7 @@ mod api_http;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tauri::Manager;
-use libp2p::Multiaddr;
+use libp2p::{Multiaddr, identity};
 use axum::{routing, Json, extract::{State, Query}};
 use serde::Deserialize;
 
@@ -17,6 +17,29 @@ use zing_cdn_core::p2p::node::ZingP2pNode;
 use crate::api_http::HttpApiState;
 
 const CACHE_BUDGET: u64 = 500 * 1024 * 1024;
+
+fn keypair_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .unwrap_or_default()
+        .join(".zing-cdn")
+        .join("keypair")
+}
+
+fn load_or_generate_keypair() -> identity::Keypair {
+    let path = keypair_path();
+    if let Ok(data) = std::fs::read(&path) {
+        if let Ok(kp) = identity::Keypair::from_protobuf_encoding(&data) {
+            return kp;
+        }
+    }
+    let kp = identity::Keypair::generate_ed25519();
+    let data = kp.to_protobuf_encoding().expect("serialize keypair");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(path, &data).ok();
+    kp
+}
 
 fn peers_file_path() -> std::path::PathBuf {
     dirs::home_dir()
@@ -90,7 +113,8 @@ fn main() {
                 BlobStore::open(&cache_dir).expect("open blob store"),
             ));
 
-            let (p2p_node, command_rx) = ZingP2pNode::new(store.clone());
+            let keypair = load_or_generate_keypair();
+            let (p2p_node, command_rx) = ZingP2pNode::new(store.clone(), keypair);
             let p2p_tx = p2p_node.command_tx().clone();
             let p2p_key = p2p_node.key().clone();
             let peer_id = p2p_node.local_peer_id();

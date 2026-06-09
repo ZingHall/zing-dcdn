@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use libp2p::Multiaddr;
+use libp2p::{Multiaddr, identity};
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
@@ -98,7 +98,9 @@ async fn main() -> anyhow::Result<()> {
     let cache_eviction = Arc::new(RwLock::new(eviction));
 
     let store_handle = cache_store.clone();
-    let (p2p_node, command_rx) = ZingP2pNode::new(store_handle);
+    let keypair = load_or_generate_keypair();
+    eprintln!("P2P keypair loaded (peer_id: {})", keypair.public().to_peer_id());
+    let (p2p_node, command_rx) = ZingP2pNode::new(store_handle, keypair);
     let p2p_peer_id = p2p_node.local_peer_id();
     let p2p_command_tx = p2p_node.command_tx().clone();
     let p2p_key = p2p_node.key().clone();
@@ -185,6 +187,27 @@ fn parse_bootstrap_peers(inputs: &[String]) -> Vec<(libp2p::PeerId, Multiaddr)> 
             None
         })
         .collect()
+}
+
+fn keypair_path() -> std::path::PathBuf {
+    let home = dirs::home_dir().unwrap_or_default();
+    home.join(".zing-cdn").join("keypair")
+}
+
+fn load_or_generate_keypair() -> identity::Keypair {
+    let path = keypair_path();
+    if let Ok(data) = std::fs::read(&path) {
+        if let Ok(kp) = identity::Keypair::from_protobuf_encoding(&data) {
+            return kp;
+        }
+    }
+    let kp = identity::Keypair::generate_ed25519();
+    let data = kp.to_protobuf_encoding().expect("serialize keypair");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::write(path, &data).ok();
+    kp
 }
 
 async fn connect_mainnet() -> anyhow::Result<ZingClient> {

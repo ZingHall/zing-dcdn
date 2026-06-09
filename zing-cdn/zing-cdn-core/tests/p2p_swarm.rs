@@ -7,6 +7,9 @@ use tokio::sync::oneshot;
 use zing_cdn_core::cache::store::BlobStore;
 use zing_cdn_core::p2p::node::ZingP2pNode;
 use zing_cdn_core::p2p::P2pCommand;
+use libp2p::identity;
+
+fn create_keypair() -> identity::Keypair { identity::Keypair::generate_ed25519() }
 
 fn create_store() -> Arc<RwLock<BlobStore>> {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -17,7 +20,7 @@ fn create_store() -> Arc<RwLock<BlobStore>> {
 #[tokio::test]
 async fn test_p2p_node_starts_and_listens() {
     let store = create_store();
-    let (node, cmd_rx) = ZingP2pNode::new(store.clone());
+    let (node, cmd_rx) = ZingP2pNode::new(store.clone(), create_keypair());
     let key = node.key().clone();
     let _tx = node.command_tx().clone();
 
@@ -40,7 +43,7 @@ async fn test_p2p_node_starts_and_listens() {
 #[tokio::test]
 async fn test_p2p_node_announce_blob() {
     let store = create_store();
-    let (node, cmd_rx) = ZingP2pNode::new(store.clone());
+    let (node, cmd_rx) = ZingP2pNode::new(store.clone(), create_keypair());
     let key = node.key().clone();
     let tx = node.command_tx().clone();
 
@@ -93,7 +96,7 @@ async fn test_node_to_node_blob_transfer() {
     store_a.write().await.put(test_blob_id, test_data).expect("put");
 
     // Start Node A on fixed port
-    let (node_a, rx_a) = ZingP2pNode::new(store_a.clone());
+    let (node_a, rx_a) = ZingP2pNode::new(store_a.clone(), create_keypair());
     let key_a = node_a.key().clone();
     let tx_a = node_a.command_tx().clone();
     let peer_a = node_a.local_peer_id();
@@ -110,7 +113,7 @@ async fn test_node_to_node_blob_transfer() {
     tx_a.send(P2pCommand::AnnounceBlob { blob_id: blob_id_bytes }).await.expect("announce");
 
     // Start Node B
-    let (node_b, rx_b) = ZingP2pNode::new(store_b.clone());
+    let (node_b, rx_b) = ZingP2pNode::new(store_b.clone(), create_keypair());
     let key_b = node_b.key().clone();
     let tx_b = node_b.command_tx().clone();
     let listen_b: Multiaddr = "/ip4/127.0.0.1/udp/19002/quic-v1".parse().expect("addr");

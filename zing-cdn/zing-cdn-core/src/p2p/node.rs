@@ -43,8 +43,7 @@ pub struct ZingP2pNode {
 }
 
 impl ZingP2pNode {
-    pub fn new(_store: BlobStoreHandle) -> (Self, mpsc::Receiver<P2pCommand>) {
-        let key = identity::Keypair::generate_ed25519();
+    pub fn new(_store: BlobStoreHandle, key: identity::Keypair) -> (Self, mpsc::Receiver<P2pCommand>) {
         let local_peer_id = key.public().to_peer_id();
         let (command_tx, command_rx) = mpsc::channel(256);
         (Self { key, local_peer_id, command_tx }, command_rx)
