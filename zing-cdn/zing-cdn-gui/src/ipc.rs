@@ -11,7 +11,18 @@ extern "C" {
 const API_PORT: u16 = 13420;
 
 fn get_api_port() -> u16 {
-    // Read data-api-port from <html> tag, injected at build time via ZING_API_PORT env var
+    if let Some(port) = js_sys::Reflect::get(
+        &js_sys::global(),
+        &wasm_bindgen::JsValue::from_str("ZING_API_PORT"),
+    )
+    .ok()
+    .and_then(|v| v.as_f64())
+    .map(|v| v as u16)
+    {
+        if port > 0 {
+            return port;
+        }
+    }
     if let Some(window) = web_sys::window() {
         if let Some(doc) = window.document() {
             if let Some(html) = doc.document_element() {

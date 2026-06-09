@@ -4,6 +4,7 @@ mod api_http;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use tauri::Manager;
 use libp2p::Multiaddr;
 use axum::{routing, Json, extract::{State, Query}};
 use serde::Deserialize;
@@ -60,7 +61,7 @@ fn parse_bootstrap_peers(peers: &[String]) -> Vec<(libp2p::PeerId, Multiaddr)> {
 
 fn main() {
     tauri::Builder::default()
-        .setup(|_app| {
+        .setup(|app| {
             let cache_dir = std::env::var("ZING_CACHE_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| {
@@ -152,6 +153,11 @@ fn main() {
                     p2p_key, command_rx, store, listen_addr, bootstrap_addrs,
                 ).await;
             });
+
+            app.get_webview_window("main")
+                .unwrap()
+                .eval(&format!("window.ZING_API_PORT = {api_port};"))
+                .ok();
 
             Ok(())
         })
