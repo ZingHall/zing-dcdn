@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use walrus_core::encoding::EncodingConfig;
 use walrus_core::encoding::EncodingFactory;
@@ -22,10 +23,15 @@ impl BlobVerifier {
         expected_blob_id: &BlobId,
         blob_data: &[u8],
     ) -> ZingResult<()> {
+        let t0 = Instant::now();
         let factory = self.encoding_config.get_for_type(EncodingType::RS2);
+        eprintln!("L1: verify — get_for_type in {:?}", t0.elapsed());
+
+        let t_compute = Instant::now();
         let computed_blob_id = factory
             .compute_blob_id(blob_data)
             .map_err(|e| ZingError::WalrusClient(format!("compute_blob_id failed: {e}")))?;
+        eprintln!("L1: verify — compute_blob_id ({} bytes) in {:?}", blob_data.len(), t_compute.elapsed());
 
         if &computed_blob_id != expected_blob_id {
             return Err(ZingError::VerificationFailed {
@@ -34,6 +40,7 @@ impl BlobVerifier {
             });
         }
 
+        eprintln!("L1: verify — total {:?}", t0.elapsed());
         Ok(())
     }
 

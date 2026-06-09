@@ -66,3 +66,18 @@ opt-level = 3
 
 [profile.dev.package.reed-solomon-simd]
 opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.fastcrypto]
+opt-level = 3
+
+[profile.dev.package.ed25519-dalek]
+opt-level = 3
+
+[profile.dev.package.curve25519-dalek]
+opt-level = 3
