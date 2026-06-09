@@ -242,19 +242,7 @@ impl Resolver {
     ) -> Option<ZingResult<ResolveResult>> {
         let t0 = Instant::now();
 
-        let metadata = match self.walrus_client.fetch_metadata(blob_id).await {
-            Ok(m) => {
-                eprintln!("L1: fetch_metadata done in {:?}", t0.elapsed());
-                m
-            }
-            Err(e) => {
-                tracing::warn!(blob_id = %blob_id_hex, error = %e, "L1: metadata fetch failed");
-                eprintln!("L1: metadata fetch failed after {:?}: {e}", t0.elapsed());
-                return None;
-            }
-        };
-
-        if let Err(e) = self.verifier.verify_blob_against_metadata(&metadata, &data) {
+        if let Err(e) = self.verifier.verify_blob_by_id(blob_id, &data) {
             tracing::warn!(blob_id = %blob_id_hex, error = %e, "L1: verification failed");
             eprintln!("L1: verification failed after {:?}: {e}", t0.elapsed());
             self.reputation.write().await.record_corruption(&peer.to_string());

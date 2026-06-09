@@ -57,3 +57,12 @@ hex = "0.4"
 
 # Pin allocative to match Walrus's resolved version (0.3.4)
 allocative = "0.3.4"
+
+[profile.dev]
+opt-level = 0
+
+[profile.dev.package.walrus-core]
+opt-level = 3
+
+[profile.dev.package.reed-solomon-simd]
+opt-level = 3
