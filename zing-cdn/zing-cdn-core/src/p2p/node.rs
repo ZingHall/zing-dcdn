@@ -244,10 +244,12 @@ impl ZingP2pNode {
                                 kad::GetProvidersOk::FoundProviders { providers, .. } => {
                                     if let Some(sender) = pending_finds.remove(&id) {
                                         let peers: Vec<PeerId> = providers.into_iter().collect();
+                                        eprintln!("Kad GetProviders found {} providers: {peers:?}", peers.len());
                                         let _ = sender.send(peers);
                                     }
                                 }
                                 kad::GetProvidersOk::FinishedWithNoAdditionalRecord { .. } => {
+                                    eprintln!("Kad GetProviders finished with no providers");
                                     if let Some(sender) = pending_finds.remove(&id) {
                                         let _ = sender.send(vec![]);
                                     }
@@ -255,7 +257,7 @@ impl ZingP2pNode {
                             }
                         }
                         kad::QueryResult::GetProviders(Err(e)) => {
-                            tracing::warn!(?id, %e, "get_providers query failed");
+                            eprintln!("Kad GetProviders error: {e}");
                             if let Some(sender) = pending_finds.remove(&id) {
                                 let _ = sender.send(vec![]);
                             }

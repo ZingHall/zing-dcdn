@@ -234,6 +234,8 @@ pub async fn peers_add(state: &HttpApiState, addr_str: &str) -> Result<(), Strin
         }
     }
 
+    let _ = state.p2p_tx.send(P2pCommand::Bootstrap).await;
+
     let mut peers = state.bootstrap_peers.write().await;
     if !peers.contains(&addr_str.to_string()) {
         peers.push(addr_str.to_string());

@@ -89,6 +89,7 @@ impl Resolver {
         tx: &mpsc::Sender<P2pCommand>,
     ) -> Option<ZingResult<ResolveResult>> {
         tracing::info!(blob_id = %blob_id_hex, "L1: looking up DHT providers");
+        eprintln!("L1: looking up DHT providers for {blob_id_hex}");
 
         let (find_reply, find_rx) = tokio::sync::oneshot::channel();
         if tx.send(P2pCommand::FindProviders {
@@ -105,6 +106,7 @@ impl Resolver {
 
         if peers.is_empty() {
             tracing::info!(blob_id = %blob_id_hex, "L1: no providers found in DHT");
+            eprintln!("L1: no providers found in DHT for {blob_id_hex}");
             return None;
         }
 
@@ -115,6 +117,7 @@ impl Resolver {
         };
 
         tracing::info!(blob_id = %blob_id_hex, peer = %peer, "L1: fetching from peer");
+        eprintln!("L1: fetching blob {blob_id_hex} from peer {peer}");
 
         let (fetch_reply, fetch_rx) = tokio::sync::oneshot::channel();
         if tx.send(P2pCommand::FetchBlob {
@@ -127,7 +130,10 @@ impl Resolver {
 
         let data = match tokio::time::timeout(Duration::from_secs(30), fetch_rx).await {
             Ok(Ok(Ok(data))) => data,
-            _ => return None,
+            _ => {
+                eprintln!("L1: fetch failed or timed out for {blob_id_hex}");
+                return None;
+            }
         };
 
         let metadata = match self.walrus_client.fetch_metadata(blob_id).await {
@@ -157,6 +163,7 @@ impl Resolver {
 
         self.reputation.write().await.record_success(&peer.to_string());
         tracing::info!(blob_id = %blob_id_hex, peer = %peer, "L1: blob fetched and verified");
+        eprintln!("L1: SUCCESS — blob fetched and verified from peer {peer}");
 
         Some(Ok(ResolveResult {
             data,
