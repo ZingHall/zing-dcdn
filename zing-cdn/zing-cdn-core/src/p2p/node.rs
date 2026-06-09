@@ -133,8 +133,9 @@ impl ZingP2pNode {
         match cmd {
             P2pCommand::AnnounceBlob { blob_id } => {
                 let key = kad::RecordKey::new(&blob_id);
-                if let Err(e) = swarm.behaviour_mut().kad.start_providing(key) {
-                    tracing::warn!(error = %e, "start_providing");
+                match swarm.behaviour_mut().kad.start_providing(key) {
+                    Ok(_) => eprintln!("Kad start_providing ok (blob {:02x?})", &blob_id[..4]),
+                    Err(e) => eprintln!("Kad start_providing FAILED: {e}"),
                 }
             }
             P2pCommand::FindProviders { blob_id, reply } => {
@@ -161,8 +162,10 @@ impl ZingP2pNode {
                 swarm.behaviour_mut().kad.add_address(&peer_id, addr);
             }
             P2pCommand::Bootstrap => {
-                if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
-                    tracing::warn!(error = %e, "kad bootstrap");
+                eprintln!("Kad bootstrap requested");
+                match swarm.behaviour_mut().kad.bootstrap() {
+                    Ok(query_id) => eprintln!("Kad bootstrap started (query_id: {query_id:?})"),
+                    Err(e) => eprintln!("Kad bootstrap FAILED: {e}"),
                 }
             }
             P2pCommand::GetConnectedPeers { reply } => {
@@ -264,6 +267,8 @@ impl ZingP2pNode {
                         }
                         _ => {}
                     }
+                } else {
+                    eprintln!("Kad event (not OutboundQueryProgressed): {kad_event:?}");
                 }
             }
             ZingBehaviourEvent::Data(data_event) => {

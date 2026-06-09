@@ -7,6 +7,7 @@ use crate::mesh::reputation::PeerReputationTable;
 use crate::types::{ZingResult, BlobResolution};
 use std::sync::Arc;
 use std::time::Duration;
+use libp2p::PeerId;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use walrus_core::BlobId;
@@ -88,24 +89,55 @@ impl Resolver {
         blob_id_hex: &str,
         tx: &mpsc::Sender<P2pCommand>,
     ) -> Option<ZingResult<ResolveResult>> {
-        tracing::info!(blob_id = %blob_id_hex, "L1: looking up DHT providers");
         eprintln!("L1: looking up DHT providers for {blob_id_hex}");
 
-        let (find_reply, find_rx) = tokio::sync::oneshot::channel();
-        if tx.send(P2pCommand::FindProviders {
-            blob_id: blob_id.0,
-            reply: find_reply,
-        }).await.is_err() {
-            return None;
-        }
+        let peers = Self::run_find_providers(tx, blob_id).await;
 
-        let peers = tokio::time::timeout(Duration::from_secs(5), find_rx)
-            .await
-            .unwrap_or(Ok(vec![]))
-            .unwrap_or(vec![]);
+        let peers = if peers.is_empty() {
+            eprintln!("L1: DHT returned empty, retrying in 2s...");
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let retry = Self::run_find_providers(tx, blob_id).await;
+            if retry.is_empty() {
+                eprintln!("L1: retry also empty, trying direct connected peers");
+                let (reply, rx) = tokio::sync::oneshot::channel();
+                if tx.send(P2pCommand::GetConnectedPeers { reply }).await.is_err() {
+                    return None;
+                }
+                let connected: Vec<PeerId> = rx.await.unwrap_or(vec![]);
+                eprintln!("L1: {} connected peer(s) available", connected.len());
+                if connected.is_empty() {
+                    return None;
+                }
+                for peer in &connected {
+                    eprintln!("L1: trying direct FetchBlob from {peer}");
+                    let (fetch_reply, fetch_rx) = tokio::sync::oneshot::channel();
+                    if tx.send(P2pCommand::FetchBlob {
+                        peer_id: *peer,
+                        blob_id: blob_id.0,
+                        reply: fetch_reply,
+                    }).await.is_err() {
+                        continue;
+                    }
+                    match tokio::time::timeout(Duration::from_secs(30), fetch_rx).await {
+                        Ok(Ok(Ok(data))) => {
+                            eprintln!("L1: got blob from direct peer {peer}");
+                            return self.finalize_l1_fetch(
+                                blob_id, blob_id_hex, *peer, data,
+                            ).await;
+                        }
+                        _ => {
+                            eprintln!("L1: direct fetch from {peer} failed, trying next");
+                        }
+                    }
+                }
+                return None;
+            }
+            retry
+        } else {
+            peers
+        };
 
         if peers.is_empty() {
-            tracing::info!(blob_id = %blob_id_hex, "L1: no providers found in DHT");
             eprintln!("L1: no providers found in DHT for {blob_id_hex}");
             return None;
         }
@@ -116,7 +148,6 @@ impl Resolver {
                 .max_by_key(|p| rep.get_score(&p.to_string()).unwrap_or(0))?
         };
 
-        tracing::info!(blob_id = %blob_id_hex, peer = %peer, "L1: fetching from peer");
         eprintln!("L1: fetching blob {blob_id_hex} from peer {peer}");
 
         let (fetch_reply, fetch_rx) = tokio::sync::oneshot::channel();
@@ -136,16 +167,45 @@ impl Resolver {
             }
         };
 
+        self.finalize_l1_fetch(blob_id, blob_id_hex, peer, data).await
+    }
+
+    async fn run_find_providers(
+        tx: &mpsc::Sender<P2pCommand>,
+        blob_id: &BlobId,
+    ) -> Vec<PeerId> {
+        let (reply, rx) = tokio::sync::oneshot::channel();
+        if tx.send(P2pCommand::FindProviders {
+            blob_id: blob_id.0,
+            reply,
+        }).await.is_err() {
+            return vec![];
+        }
+        tokio::time::timeout(Duration::from_secs(5), rx)
+            .await
+            .unwrap_or(Ok(vec![]))
+            .unwrap_or(vec![])
+    }
+
+    async fn finalize_l1_fetch(
+        &self,
+        blob_id: &BlobId,
+        blob_id_hex: &str,
+        peer: PeerId,
+        data: Vec<u8>,
+    ) -> Option<ZingResult<ResolveResult>> {
         let metadata = match self.walrus_client.fetch_metadata(blob_id).await {
             Ok(m) => m,
             Err(e) => {
                 tracing::warn!(blob_id = %blob_id_hex, error = %e, "L1: metadata fetch failed");
+                eprintln!("L1: metadata fetch failed: {e}");
                 return None;
             }
         };
 
         if let Err(e) = self.verifier.verify_blob_against_metadata(&metadata, &data) {
             tracing::warn!(blob_id = %blob_id_hex, error = %e, "L1: verification failed");
+            eprintln!("L1: verification failed: {e}");
             self.reputation.write().await.record_corruption(&peer.to_string());
             return None;
         }
@@ -153,7 +213,7 @@ impl Resolver {
         {
             let store = self.store.write().await;
             if let Err(e) = store.put(blob_id_hex, &data) {
-                tracing::warn!(blob_id = %blob_id_hex, error = %e, "L1: cache write failed");
+                eprintln!("L1: cache write failed: {e}");
             }
         }
         {
@@ -162,7 +222,6 @@ impl Resolver {
         }
 
         self.reputation.write().await.record_success(&peer.to_string());
-        tracing::info!(blob_id = %blob_id_hex, peer = %peer, "L1: blob fetched and verified");
         eprintln!("L1: SUCCESS — blob fetched and verified from peer {peer}");
 
         Some(Ok(ResolveResult {
