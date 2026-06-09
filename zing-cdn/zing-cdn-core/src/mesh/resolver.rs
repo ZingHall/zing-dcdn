@@ -7,7 +7,7 @@ use crate::mesh::reputation::PeerReputationTable;
 use crate::types::{ZingResult, BlobResolution};
 use std::sync::Arc;
 use std::time::Duration;
-use libp2p::{PeerId, Multiaddr, multiaddr::Protocol};
+use libp2p::{PeerId, Multiaddr};
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use walrus_core::BlobId;
@@ -89,6 +89,10 @@ impl Resolver {
         blob_id_hex: &str,
         tx: &mpsc::Sender<P2pCommand>,
     ) -> Option<ZingResult<ResolveResult>> {
+
+        if let Some(result) = self.try_direct_peers(blob_id, blob_id_hex, tx).await {
+            return Some(result);
+        }
 
         let peers = Self::run_find_providers(tx, blob_id).await;
 
@@ -178,8 +182,7 @@ impl Resolver {
             return true;
         }
 
-        let mut addr = Multiaddr::empty();
-        addr.push(Protocol::P2p(*peer));
+        let addr = Multiaddr::empty();
         let _ = tx.send(P2pCommand::Dial { peer_id: *peer, addr }).await;
 
         for _ in 0..10 {
