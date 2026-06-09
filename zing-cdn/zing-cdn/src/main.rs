@@ -198,7 +198,16 @@ fn load_or_generate_keypair(cache_dir: &PathBuf) -> identity::Keypair {
     }
     let kp = identity::Keypair::generate_ed25519();
     let data = kp.to_protobuf_encoding().expect("serialize keypair");
-    std::fs::write(path, &data).ok();
+    if std::fs::OpenOptions::new().write(true).create_new(true).open(&path)
+        .and_then(|mut f| std::io::Write::write_all(&mut f, &data))
+        .is_err()
+    {
+        if let Ok(data) = std::fs::read(&path) {
+            if let Ok(kp) = identity::Keypair::from_protobuf_encoding(&data) {
+                return kp;
+            }
+        }
+    }
     kp
 }
 
