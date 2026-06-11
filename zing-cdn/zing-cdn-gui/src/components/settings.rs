@@ -1,25 +1,31 @@
 use dioxus::prelude::*;
 use crate::ipc;
 
+fn default_peers() -> ipc::PeersInfo {
+    ipc::PeersInfo {
+        bootstrap: vec![],
+        connected: vec![],
+        listen_addr: "loading...".into(),
+        cache_dir: "loading...".into(),
+        p2p_addr: "loading...".into(),
+    }
+}
+
+async fn refresh_peers(mut signal: Signal<ipc::PeersInfo>) {
+    if let Ok(info) = ipc::list_peers().await {
+        signal.set(info);
+    }
+}
+
 #[component]
 pub fn Settings() -> Element {
     let mut input_addr = use_signal(|| String::new());
     let mut status = use_signal(|| String::new());
+    let peers = use_signal(default_peers);
 
-    let mut peers_info = use_resource(|| async move {
-        ipc::list_peers().await.ok()
-    });
+    spawn(refresh_peers(peers.clone()));
 
-    let guard = peers_info.read();
-    let info = match &*guard {
-        Some(Some(p)) => p.clone(),
-        _ => ipc::PeersInfo {
-            bootstrap: vec![], connected: vec![], listen_addr: "loading...".into(),
-            cache_dir: "loading...".into(), p2p_addr: "loading...".into(),
-        },
-    };
-    drop(guard);
-
+    let info = peers.read();
     let status_text = status.read().clone();
     let listen = info.listen_addr.clone();
     let cache = info.cache_dir.clone();
@@ -54,12 +60,13 @@ pub fn Settings() -> Element {
                             if addr.is_empty() { return; }
                             status.set("Adding...".into());
                             let a = addr.clone();
+                            let p = peers;
                             spawn(async move {
                                 match ipc::add_peer(&a).await {
                                     Ok(()) => {
                                         status.set("Added".into());
                                         input_addr.set(String::new());
-                                        peers_info.restart();
+                                        refresh_peers(p).await;
                                     }
                                     Err(e) => status.set(format!("Error: {e}")),
                                 }
@@ -82,11 +89,12 @@ pub fn Settings() -> Element {
                             button {
                                 onclick: {
                                     let a = addr.clone();
+                                    let p = peers;
                                     move |_| {
                                         let a = a.clone();
                                         spawn(async move {
                                             let _ = ipc::remove_peer(&a).await;
-                                            peers_info.restart();
+                                            refresh_peers(p).await;
                                         });
                                     }
                                 },
