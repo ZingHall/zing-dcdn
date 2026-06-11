@@ -34,6 +34,7 @@ pub enum P2pCommand {
     Bootstrap,
     GetConnectedPeers { reply: oneshot::Sender<Vec<PeerId>> },
     Dial { peer_id: PeerId, addr: Multiaddr },
+    Disconnect { peer_id: PeerId },
 }
 
 pub struct ZingP2pNode {
@@ -184,6 +185,12 @@ impl ZingP2pNode {
                 match swarm.dial(dial_addr) {
                     Ok(()) => tracing::info!(%peer_id, "dialing peer"),
                     Err(e) => tracing::warn!(error = %e, %peer_id, "dial failed"),
+                }
+            }
+            P2pCommand::Disconnect { peer_id } => {
+                tracing::info!(%peer_id, "disconnecting peer");
+                if swarm.disconnect_peer_id(peer_id).is_err() {
+                    tracing::warn!(%peer_id, "disconnect failed");
                 }
             }
         }

@@ -298,7 +298,9 @@ pub async fn peers_list(state: &HttpApiState) -> Result<PeersInfo, String> {
 pub async fn peers_add(state: &HttpApiState, addr_str: &str) -> Result<(), String> {
     use libp2p::multiaddr::Protocol;
 
-    let addr: Multiaddr = addr_str.parse().map_err(|e| format!("invalid multiaddr: {e}"))?;
+    let addr: Multiaddr = addr_str.parse().map_err(|_| {
+        format!("invalid multiaddr — expected format: /ip4/<ip>/udp/<port>/quic-v1/p2p/<peer_id>")
+    })?;
     let mut peer_id = None;
     for proto in addr.iter() {
         if let Protocol::P2p(peer) = proto {
@@ -340,6 +342,17 @@ pub async fn peers_add(state: &HttpApiState, addr_str: &str) -> Result<(), Strin
 }
 
 pub async fn peers_remove(state: &HttpApiState, addr_str: &str) -> Result<(), String> {
+    use libp2p::multiaddr::Protocol;
+
+    if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+        for proto in addr.iter() {
+            if let Protocol::P2p(peer) = proto {
+                let _ = state.p2p_tx.send(P2pCommand::Disconnect { peer_id: peer }).await;
+                break;
+            }
+        }
+    }
+
     let mut peers = state.bootstrap_peers.write().await;
     peers.retain(|p| p != addr_str);
     Ok(())
