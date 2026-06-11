@@ -15,7 +15,7 @@ pub fn Settings() -> Element {
         Some(Some(p)) => p.clone(),
         _ => ipc::PeersInfo {
             bootstrap: vec![], connected: vec![], listen_addr: "loading...".into(),
-            cache_dir: "loading...".into(), peer_id: "loading...".into(), p2p_addr: "loading...".into(),
+            cache_dir: "loading...".into(), p2p_addr: "loading...".into(),
         },
     };
     drop(guard);

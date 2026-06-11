@@ -140,7 +140,6 @@ fn main() {
                 bootstrap_peers: bootstrap_peers.clone(),
                 cache_dir: cache_dir.clone(),
                 p2p_port,
-                api_port,
                 client,
             };
 

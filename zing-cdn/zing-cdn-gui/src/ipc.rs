@@ -138,8 +138,6 @@ pub struct PeersInfo {
     pub connected: Vec<String>,
     pub listen_addr: String,
     pub cache_dir: String,
-    #[allow(dead_code)]
-    pub peer_id: String,
     pub p2p_addr: String,
 }
 
