@@ -22,6 +22,8 @@ use zing_cdn_core::walrus::verify::BlobVerifier;
 const CACHE_BUDGET_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
 const DEFAULT_CACHE_DIR: &str = "~/.zing-cdn/cache";
 
+const DEFAULT_BOOTSTRAP: &[&str] = &[];
+
 #[derive(Parser)]
 #[command(name = "zing-cdn", about = "Walrus-native P2P content distribution mesh")]
 struct Cli {
@@ -99,17 +101,22 @@ async fn main() -> anyhow::Result<()> {
 
     let store_handle = cache_store.clone();
     let keypair = load_or_generate_keypair(&cache_dir);
-    eprintln!("P2P keypair loaded (peer_id: {})", keypair.public().to_peer_id());
+    tracing::info!(peer_id = %keypair.public().to_peer_id(), "P2P keypair loaded");
     let (p2p_node, command_rx) = ZingP2pNode::new(store_handle, keypair);
     let p2p_peer_id = p2p_node.local_peer_id();
     let p2p_command_tx = p2p_node.command_tx().clone();
     let p2p_key = p2p_node.key().clone();
     let p2p_listen = cli.listen.clone();
-    let bootstrap_peers = parse_bootstrap_peers(&cli.bootstrap);
+    let mut bootstrap_peers_cli: Vec<String> = cli.bootstrap.clone();
+    for bp in DEFAULT_BOOTSTRAP {
+        let bp_str = bp.to_string();
+        if !bootstrap_peers_cli.contains(&bp_str) {
+            bootstrap_peers_cli.push(bp_str);
+        }
+    }
+    let bootstrap_peers = parse_bootstrap_peers(&bootstrap_peers_cli);
 
     tracing::info!(peer_id = %p2p_peer_id, listen = %cli.listen, "starting P2P swarm");
-    eprintln!("P2P peer_id: {p2p_peer_id}");
-    eprintln!("P2P listen:  {}", cli.listen);
     let p2p_store = cache_store.clone();
     tokio::spawn(async move {
         if let Err(e) = ZingP2pNode::run(
@@ -148,9 +155,9 @@ async fn main() -> anyhow::Result<()> {
     }?;
 
     if cli.serve {
-        eprintln!("P2P node running. Press Ctrl+C to stop.");
+        tracing::info!("P2P node running. Press Ctrl+C to stop.");
         tokio::signal::ctrl_c().await?;
-        eprintln!("Shutting down...");
+        tracing::info!("Shutting down...");
     }
 
     Ok(())
@@ -172,19 +179,17 @@ fn parse_bootstrap_peers(inputs: &[String]) -> Vec<(libp2p::PeerId, Multiaddr)> 
     inputs
         .iter()
         .filter_map(|s| {
-            if let Ok(addr) = Multiaddr::from_str(s) {
-                let mut peer_id = None;
-                for protocol in addr.iter() {
-                    if let libp2p::multiaddr::Protocol::P2p(peer) = protocol {
-                        peer_id = Some(peer);
-                        break;
-                    }
-                }
-                if let Some(peer_id) = peer_id {
-                    return Some((peer_id, addr));
+            let mut addr = Multiaddr::from_str(s).ok()?;
+            let mut peer_id = None;
+            for protocol in addr.iter() {
+                if let libp2p::multiaddr::Protocol::P2p(peer) = protocol {
+                    peer_id = Some(peer);
+                    break;
                 }
             }
-            None
+            let peer_id = peer_id?;
+            addr.pop();
+            Some((peer_id, addr))
         })
         .collect()
 }

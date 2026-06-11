@@ -21,6 +21,9 @@ base64 = "0.22"
 libp2p = { version = "0.54", features = ["tokio", "quic", "kad", "gossipsub", "noise", "tcp", "yamux", "macros", "request-response", "identify", "ping"] }
 tokio-stream = "0.1"
 dirs = "5"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = "0.2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

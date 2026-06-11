@@ -86,6 +86,15 @@ impl ZingP2pNode {
             swarm.behaviour_mut().kad.add_address(peer_id, addr.clone());
         }
 
+        for (peer_id, addr) in &bootstrap_addrs {
+            let mut dial_addr = addr.clone();
+            dial_addr.push(libp2p::multiaddr::Protocol::P2p(*peer_id));
+            match swarm.dial(dial_addr) {
+                Ok(()) => tracing::info!(%peer_id, "dialing bootstrap peer"),
+                Err(e) => tracing::warn!(%peer_id, error = %e, "bootstrap dial failed"),
+            }
+        }
+
         if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
             tracing::warn!(error = %e, "kad bootstrap");
         }

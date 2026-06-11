@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tauri::Manager;
 use libp2p::{Multiaddr, identity};
+use tracing_subscriber::EnvFilter;
 use axum::{routing, Json, extract::{State, Query}, response::sse::{Event, Sse}};
 use serde::Deserialize;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -20,6 +21,8 @@ use zing_cdn_core::client::ZingClient;
 use crate::api_http::HttpApiState;
 
 const CACHE_BUDGET: u64 = 500 * 1024 * 1024;
+
+const DEFAULT_BOOTSTRAP: &[&str] = &[];
 
 fn load_or_generate_keypair(cache_dir: &Path) -> identity::Keypair {
     let path = cache_dir.join("keypair");
@@ -62,7 +65,7 @@ fn save_peers(peers: &[String], cache_dir: &Path) {
 fn parse_bootstrap_peers(peers: &[String]) -> Vec<(libp2p::PeerId, Multiaddr)> {
     use libp2p::multiaddr::Protocol;
     peers.iter().filter_map(|s| {
-        let addr: Multiaddr = s.parse().ok()?;
+        let mut addr: Multiaddr = s.parse().ok()?;
         let peer_id = addr.iter().find_map(|p| {
             if let Protocol::P2p(peer) = p {
                 Some(peer)
@@ -70,6 +73,7 @@ fn parse_bootstrap_peers(peers: &[String]) -> Vec<(libp2p::PeerId, Multiaddr)> {
                 None
             }
         })?;
+        addr.pop();
         Some((peer_id, addr))
     }).collect()
 }
@@ -87,6 +91,19 @@ fn main() {
                 });
             std::fs::create_dir_all(&cache_dir).expect("create cache dir");
 
+            let log_dir = cache_dir.clone();
+            let file_appender = tracing_appender::rolling::never(&log_dir, "zing-cdn.log");
+            let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| EnvFilter::new("info"))
+                )
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .init();
+            std::mem::forget(guard);
+
             let p2p_port: u16 = std::env::var("ZING_P2P_PORT")
                 .unwrap_or_else(|_| "34291".into())
                 .parse()
@@ -99,7 +116,7 @@ fn main() {
                 .parse()
                 .expect("valid listen addr");
 
-            eprintln!("P2P port: {p2p_port}, API port: {api_port}, cache: {}", cache_dir.display());
+            tracing::info!("P2P port: {p2p_port}, API port: {api_port}, cache: {}", cache_dir.display());
 
             let store = Arc::new(RwLock::new(
                 BlobStore::open(&cache_dir).expect("open blob store"),
@@ -111,7 +128,7 @@ fn main() {
             let p2p_key = p2p_node.key().clone();
             let peer_id = p2p_node.local_peer_id();
 
-            eprintln!("PeerId: {peer_id}");
+            tracing::info!("PeerId: {peer_id}");
 
             let client = Arc::new(
                 tauri::async_runtime::block_on(ZingClient::from_mainnet())
@@ -126,7 +143,13 @@ fn main() {
                 CACHE_BUDGET,
             )));
 
-            let peers_str = load_peers(&cache_dir);
+            let mut peers_str = load_peers(&cache_dir);
+            for bp in DEFAULT_BOOTSTRAP {
+                let bp_str = bp.to_string();
+                if !peers_str.contains(&bp_str) {
+                    peers_str.push(bp_str);
+                }
+            }
             let bootstrap_addrs = parse_bootstrap_peers(&peers_str);
             let bootstrap_peers = Arc::new(RwLock::new(peers_str));
 
@@ -159,7 +182,7 @@ fn main() {
                 .layer(cors)
                 .with_state(api_state);
 
-            eprintln!("HTTP API binding to 127.0.0.1:{api_port}");
+            tracing::info!("HTTP API binding to 127.0.0.1:{api_port}");
 
             // Start axum in tokio
             let bind_addr = format!("127.0.0.1:{api_port}");
@@ -167,7 +190,7 @@ fn main() {
                 let listener = tokio::net::TcpListener::bind(&bind_addr)
                     .await
                     .expect(&format!("bind http api on {bind_addr}"));
-                eprintln!("HTTP API listening on {bind_addr}");
+                tracing::info!("HTTP API listening on {bind_addr}");
                 axum::serve(listener, app_router).await.ok();
             });
 

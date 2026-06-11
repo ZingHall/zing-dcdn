@@ -145,3 +145,35 @@ zing-cdn get <blob-id> && zing-cdn pin <blob-id>
 - **zing-cdn** — CLI binary with the commands above
 - Cache location: `~/.zing-cdn/cache/` (500 MB LRU budget)
 - Backend: Walrus mainnet via `https://fullnode.mainnet.sui.io:443`
+
+## Milestones
+
+### Phase 1 — Blob-level P2P CDN ✅
+
+L0 RocksDB cache with LRU eviction and pinning. L1 P2P blob transfer via
+`/zing-cdn/data/2.0` (binary length-prefixed framing). L3 Walrus mainnet
+fallback. Kademlia DHT for provider records (`/zing-cdn/kad/1.0.0`).
+Tauri v2 + Dioxus 0.7 desktop app with Dashboard, Blob Browser, Cache, and
+Settings tabs. HTTP API (axum on localhost) for frontend-backend IPC with
+SSE streaming resolve. Multi-instance dev via env vars.
+
+### Phase 2 — Bootstrapped P2P mesh 🚧
+
+Hardcoded bootstrap nodes for zero-config peer discovery. Kademlia DHT
+auto-discovery (connect to one seed → find all peers). Auto-dial bootstrap
+peers at startup. Tracing subscriber with file-based logging for the GUI.
+Atomic keypair file creation (O_EXCL, no race conditions between instances).
+
+### Phase 3 — Sliver-level P2P (planned)
+
+Sliver-based request/response protocol replacing whole-blob transfer.
+K-of-N reconstruction from slivers fetched from different peers. Sliver-aware
+caching (nodes can cache individual slivers, not entire blobs). Parallel
+sliver fetch from multiple peers simultaneously.
+
+### Phase 4 — Economic layer (planned)
+
+On-chain peer registration and staking on Sui. Proof-of-retrievability for
+sliver storage verification. WAL-based payment for bandwidth and storage
+contributions. Smart contract reward distribution proportional to verified
+contributions.
