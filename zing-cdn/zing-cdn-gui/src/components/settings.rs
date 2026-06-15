@@ -23,7 +23,13 @@ pub fn Settings() -> Element {
     let mut status = use_signal(|| String::new());
     let peers = use_signal(default_peers);
 
-    spawn(refresh_peers(peers.clone()));
+    // Initial load — runs once on mount
+    use_effect(move || {
+        let p = peers;
+        spawn(async move {
+            refresh_peers(p).await;
+        });
+    });
 
     let info = peers.read();
     let status_text = status.read().clone();
