@@ -11,8 +11,8 @@ use tokio::sync::oneshot;
 
 use crate::p2p::behaviour::ZingBehaviour;
 use crate::p2p::behaviour::ZingBehaviourEvent;
-use crate::p2p::handler::{handle_inbound_request, BlobStoreHandle};
-use crate::p2p::protocol::BlobRequest;
+use crate::p2p::handler::{handle_inbound_range_request, handle_inbound_sliver_request, handle_inbound_request, BlobStoreHandle};
+use crate::p2p::protocol::{BlobRequest, RangeRequest, SliverRequest, AddrRequest, AddrResponse};
 use crate::types::{ZingError, ZingResult};
 
 #[derive(Debug)]
@@ -27,6 +27,25 @@ pub enum P2pCommand {
         blob_id: [u8; 32],
         reply: oneshot::Sender<ZingResult<Vec<u8>>>,
     },
+    FetchRange {
+        peer_id: PeerId,
+        blob_id: [u8; 32],
+        offset: u64,
+        length: u64,
+        reply: oneshot::Sender<ZingResult<Vec<u8>>>,
+    },
+    FetchSliver {
+        peer_id: PeerId,
+        blob_id: [u8; 32],
+        sliver_pair_index: u16,
+        axis: u8,
+        reply: oneshot::Sender<ZingResult<Vec<u8>>>,
+    },
+    DialKadPeer {
+        peer_id: PeerId,
+        addrs: Option<Vec<Multiaddr>>,
+        reply: oneshot::Sender<bool>,
+    },
     AddBootstrapPeer {
         peer_id: PeerId,
         addr: Multiaddr,
@@ -35,6 +54,10 @@ pub enum P2pCommand {
     GetConnectedPeers { reply: oneshot::Sender<Vec<PeerId>> },
     Dial { peer_id: PeerId, addr: Multiaddr },
     Disconnect { peer_id: PeerId },
+    QueryPeerAddress {
+        target: PeerId,
+        reply: oneshot::Sender<Vec<Multiaddr>>,
+    },
 }
 
 pub struct ZingP2pNode {
@@ -105,6 +128,19 @@ impl ZingP2pNode {
             request_response::OutboundRequestId,
             oneshot::Sender<ZingResult<Vec<u8>>>,
         > = HashMap::new();
+        let mut pending_range_fetches: HashMap<
+            request_response::OutboundRequestId,
+            oneshot::Sender<ZingResult<Vec<u8>>>,
+        > = HashMap::new();
+        let mut pending_sliver_fetches: HashMap<
+            request_response::OutboundRequestId,
+            oneshot::Sender<ZingResult<Vec<u8>>>,
+        > = HashMap::new();
+        let mut pending_addr_queries: HashMap<
+            request_response::OutboundRequestId,
+            oneshot::Sender<Vec<Multiaddr>>,
+        > = HashMap::new();
+        let mut peer_addresses: HashMap<PeerId, Vec<Multiaddr>> = HashMap::new();
 
         loop {
             tokio::select! {
@@ -114,6 +150,10 @@ impl ZingP2pNode {
                         cmd,
                         &mut pending_finds,
                         &mut pending_fetches,
+                        &mut pending_range_fetches,
+                        &mut pending_sliver_fetches,
+                        &mut pending_addr_queries,
+                        &mut peer_addresses,
                     );
                 }
                 event = swarm.next() => {
@@ -123,6 +163,10 @@ impl ZingP2pNode {
                             event,
                             &mut pending_finds,
                             &mut pending_fetches,
+                            &mut pending_range_fetches,
+                            &mut pending_sliver_fetches,
+                            &mut pending_addr_queries,
+                            &mut peer_addresses,
                             &store,
                         ).await,
                         None => break,
@@ -139,6 +183,10 @@ impl ZingP2pNode {
         cmd: P2pCommand,
         pending_finds: &mut HashMap<kad::QueryId, oneshot::Sender<Vec<PeerId>>>,
         pending_fetches: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<ZingResult<Vec<u8>>>>,
+        pending_range_fetches: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<ZingResult<Vec<u8>>>>,
+        pending_sliver_fetches: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<ZingResult<Vec<u8>>>>,
+        pending_addr_queries: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<Vec<Multiaddr>>>,
+        peer_addresses: &HashMap<PeerId, Vec<Multiaddr>>,
     ) {
         match cmd {
             P2pCommand::AnnounceBlob { blob_id } => {
@@ -166,6 +214,82 @@ impl ZingP2pNode {
                     .data
                     .send_request(&peer_id, request);
                 pending_fetches.insert(request_id, reply);
+            }
+            P2pCommand::FetchRange {
+                peer_id,
+                blob_id,
+                offset,
+                length,
+                reply,
+            } => {
+                let request = RangeRequest {
+                    blob_id,
+                    offset,
+                    length,
+                };
+                let request_id = swarm
+                    .behaviour_mut()
+                    .range
+                    .send_request(&peer_id, request);
+                pending_range_fetches.insert(request_id, reply);
+            }
+            P2pCommand::FetchSliver {
+                peer_id,
+                blob_id,
+                sliver_pair_index,
+                axis,
+                reply,
+            } => {
+                let request = SliverRequest {
+                    blob_id,
+                    sliver_pair_index,
+                    axis,
+                };
+                let request_id = swarm
+                    .behaviour_mut()
+                    .sliver
+                    .send_request(&peer_id, request);
+                pending_sliver_fetches.insert(request_id, reply);
+            }
+            P2pCommand::DialKadPeer { peer_id, addrs, reply } => {
+                let addresses = match addrs {
+                    Some(explicit) if !explicit.is_empty() => explicit,
+                    _ => peer_addresses.get(&peer_id).cloned().unwrap_or(vec![]),
+                };
+
+                let success = if !addresses.is_empty() {
+                    let mut connected = false;
+                    for addr in &addresses {
+                        let mut dial_addr = addr.clone();
+                        if !addr.iter().any(|p| matches!(p, libp2p::multiaddr::Protocol::P2p(_))) {
+                            dial_addr.push(libp2p::multiaddr::Protocol::P2p(peer_id));
+                        }
+                        if swarm.dial(dial_addr).is_ok() {
+                            connected = true;
+                            tracing::info!(%peer_id, %addr, "dialing Kad-discovered peer");
+                        }
+                    }
+                    connected
+                } else {
+                    false
+                };
+                let _ = reply.send(success);
+            }
+            P2pCommand::QueryPeerAddress { target, reply } => {
+                let connected: Vec<PeerId> = swarm.connected_peers().copied().collect();
+                let mut reply_opt = Some(reply);
+                for peer_id in &connected {
+                    let request = AddrRequest { peer_id: target };
+                    let request_id = swarm
+                        .behaviour_mut()
+                        .addr
+                        .send_request(peer_id, request);
+                    pending_addr_queries.insert(request_id, reply_opt.take().unwrap());
+                    break;
+                }
+                if let Some(reply) = reply_opt {
+                    let _ = reply.send(vec![]);
+                }
             }
             P2pCommand::AddBootstrapPeer { peer_id, addr } => {
                 swarm.behaviour_mut().kad.add_address(&peer_id, addr);
@@ -201,6 +325,10 @@ impl ZingP2pNode {
         event: SwarmEvent<ZingBehaviourEvent>,
         pending_finds: &mut HashMap<kad::QueryId, oneshot::Sender<Vec<PeerId>>>,
         pending_fetches: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<ZingResult<Vec<u8>>>>,
+        pending_range_fetches: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<ZingResult<Vec<u8>>>>,
+        pending_sliver_fetches: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<ZingResult<Vec<u8>>>>,
+        pending_addr_queries: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<Vec<Multiaddr>>>,
+        peer_addresses: &mut HashMap<PeerId, Vec<Multiaddr>>,
         store: &BlobStoreHandle,
     ) {
         match event {
@@ -210,6 +338,10 @@ impl ZingP2pNode {
                     behaviour_event,
                     pending_finds,
                     pending_fetches,
+                    pending_range_fetches,
+                    pending_sliver_fetches,
+                    pending_addr_queries,
+                    peer_addresses,
                     store,
                 )
                 .await;
@@ -241,35 +373,62 @@ impl ZingP2pNode {
         event: ZingBehaviourEvent,
         pending_finds: &mut HashMap<kad::QueryId, oneshot::Sender<Vec<PeerId>>>,
         pending_fetches: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<ZingResult<Vec<u8>>>>,
+        pending_range_fetches: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<ZingResult<Vec<u8>>>>,
+        pending_sliver_fetches: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<ZingResult<Vec<u8>>>>,
+        pending_addr_queries: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<Vec<Multiaddr>>>,
+        peer_addresses: &mut HashMap<PeerId, Vec<Multiaddr>>,
         store: &BlobStoreHandle,
     ) {
         match event {
             ZingBehaviourEvent::Kad(kad_event) => {
-                if let kad::Event::OutboundQueryProgressed { id, result, .. } = kad_event {
-                    match result {
-                        kad::QueryResult::GetProviders(Ok(ok)) => {
-                            match ok {
-                                kad::GetProvidersOk::FoundProviders { providers, .. } => {
-                                    if let Some(sender) = pending_finds.remove(&id) {
-                                        let peers: Vec<PeerId> = providers.into_iter().collect();
-                                        let _ = sender.send(peers);
-                                    }
-                                }
-                                kad::GetProvidersOk::FinishedWithNoAdditionalRecord { .. } => {
-                                    if let Some(sender) = pending_finds.remove(&id) {
-                                        let _ = sender.send(vec![]);
-                                    }
-                                }
-                            }
+                match kad_event {
+                    kad::Event::RoutingUpdated { peer, addresses, .. } => {
+                        let addrs: Vec<Multiaddr> = addresses.iter().cloned().collect();
+                        if !addrs.is_empty() {
+                            peer_addresses.insert(peer, addrs);
                         }
-                        kad::QueryResult::GetProviders(Err(e)) => {
-                            tracing::warn!(?id, %e, "get_providers query failed");
-                            if let Some(sender) = pending_finds.remove(&id) {
-                                let _ = sender.send(vec![]);
-                            }
-                        }
-                        _ => {}
                     }
+                    kad::Event::OutboundQueryProgressed { id, result, .. } => {
+                        match result {
+                            kad::QueryResult::GetProviders(Ok(ok)) => {
+                                match ok {
+                                    kad::GetProvidersOk::FoundProviders { providers, .. } => {
+                                        if let Some(sender) = pending_finds.remove(&id) {
+                                            let peers: Vec<PeerId> = providers.into_iter().collect();
+                                            let _ = sender.send(peers);
+                                        }
+                                    }
+                                    kad::GetProvidersOk::FinishedWithNoAdditionalRecord { .. } => {
+                                        if let Some(sender) = pending_finds.remove(&id) {
+                                            let _ = sender.send(vec![]);
+                                        }
+                                    }
+                                }
+                            }
+                            kad::QueryResult::GetProviders(Err(e)) => {
+                                tracing::warn!(?id, %e, "get_providers query failed");
+                                if let Some(sender) = pending_finds.remove(&id) {
+                                    let _ = sender.send(vec![]);
+                                }
+                            }
+                            kad::QueryResult::StartProviding(Ok(ok)) => {
+                                tracing::info!(key = ?ok.key, "Kad start_providing succeeded: provider record published");
+                            }
+                            kad::QueryResult::StartProviding(Err(e)) => {
+                                tracing::warn!(?id, %e, "Kad start_providing query failed");
+                            }
+                            kad::QueryResult::Bootstrap(Ok(ok)) => {
+                                tracing::info!(?id, remaining = ok.num_remaining, "Kad bootstrap progress");
+                            }
+                            kad::QueryResult::Bootstrap(Err(e)) => {
+                                tracing::warn!(?id, %e, "Kad bootstrap query failed");
+                            }
+                            _ => {
+                                tracing::debug!(?id, result = ?result, "Kad query progressed (unhandled)");
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             ZingBehaviourEvent::Data(data_event) => {
@@ -308,10 +467,10 @@ impl ZingP2pNode {
                     }
                     request_response::Event::OutboundFailure {
                         request_id,
+                        peer,
                         error,
-                        ..
                     } => {
-                        tracing::warn!(%request_id, %error, "outbound request failed");
+                        tracing::warn!(%request_id, %peer, %error, "outbound request failed to peer (disconnected?)");
                         if let Some(sender) = pending_fetches.remove(&request_id) {
                             let _ = sender.send(Err(ZingError::P2PNetwork(error.to_string())));
                         }
@@ -322,8 +481,159 @@ impl ZingP2pNode {
                     _ => {}
                 }
             }
+            ZingBehaviourEvent::Range(range_event) => {
+                match range_event {
+                    request_response::Event::Message { message, .. } => {
+                        match message {
+                            request_response::Message::Request {
+                                request, channel, ..
+                            } => {
+                                let response = handle_inbound_range_request(store, request).await;
+                                if let Err(e) = swarm
+                                    .behaviour_mut()
+                                    .range
+                                    .send_response(channel, response)
+                                {
+                                    tracing::warn!(error = ?e, "send_response");
+                                }
+                            }
+                            request_response::Message::Response {
+                                request_id,
+                                response,
+                                ..
+                            } => {
+                                if let Some(sender) = pending_range_fetches.remove(&request_id) {
+                                    let result = if let Some(data) = response.data {
+                                        Ok(data)
+                                    } else {
+                                        Err(ZingError::BlobNotFound(
+                                            "peer responded not found".into(),
+                                        ))
+                                    };
+                                    let _ = sender.send(result);
+                                }
+                            }
+                        }
+                    }
+                    request_response::Event::OutboundFailure {
+                        request_id,
+                        peer,
+                        error,
+                    } => {
+                        tracing::warn!(%request_id, %peer, %error, "range outbound request failed to peer (disconnected?)");
+                        if let Some(sender) = pending_range_fetches.remove(&request_id) {
+                            let _ = sender.send(Err(ZingError::P2PNetwork(error.to_string())));
+                        }
+                    }
+                    request_response::Event::InboundFailure { error, .. } => {
+                        tracing::warn!(%error, "range inbound request failed");
+                    }
+                    _ => {}
+                }
+            }
+            ZingBehaviourEvent::Sliver(sliver_event) => {
+                match sliver_event {
+                    request_response::Event::Message { message, .. } => {
+                        match message {
+                            request_response::Message::Request {
+                                request, channel, ..
+                            } => {
+                                let response = handle_inbound_sliver_request(store, request).await;
+                                if let Err(e) = swarm
+                                    .behaviour_mut()
+                                    .sliver
+                                    .send_response(channel, response)
+                                {
+                                    tracing::warn!(error = ?e, "send_response");
+                                }
+                            }
+                            request_response::Message::Response {
+                                request_id,
+                                response,
+                                ..
+                            } => {
+                                if let Some(sender) = pending_sliver_fetches.remove(&request_id) {
+                                    let result = if let Some(data) = response.data {
+                                        Ok(data)
+                                    } else {
+                                        Err(ZingError::BlobNotFound(
+                                            "peer responded not found".into(),
+                                        ))
+                                    };
+                                    let _ = sender.send(result);
+                                }
+                            }
+                        }
+                    }
+                    request_response::Event::OutboundFailure {
+                        request_id,
+                        peer,
+                        error,
+                    } => {
+                        tracing::warn!(%request_id, %peer, %error, "sliver outbound request failed to peer (disconnected?)");
+                        if let Some(sender) = pending_sliver_fetches.remove(&request_id) {
+                            let _ = sender.send(Err(ZingError::P2PNetwork(error.to_string())));
+                        }
+                    }
+                    request_response::Event::InboundFailure { error, .. } => {
+                        tracing::warn!(%error, "sliver inbound request failed");
+                    }
+                    _ => {}
+                }
+            }
+            ZingBehaviourEvent::Addr(addr_event) => {
+                match addr_event {
+                    request_response::Event::Message { message, .. } => {
+                        match message {
+                            request_response::Message::Request {
+                                request, channel, ..
+                            } => {
+                                let addrs = peer_addresses.get(&request.peer_id).cloned().unwrap_or_default();
+                                let response = AddrResponse::found(addrs);
+                                if let Err(e) = swarm
+                                    .behaviour_mut()
+                                    .addr
+                                    .send_response(channel, response)
+                                {
+                                    tracing::warn!(error = ?e, "addr send_response");
+                                }
+                            }
+                            request_response::Message::Response {
+                                request_id,
+                                response,
+                                ..
+                            } => {
+                                if let Some(sender) = pending_addr_queries.remove(&request_id) {
+                                    let _ = sender.send(response.addresses);
+                                }
+                            }
+                        }
+                    }
+                    request_response::Event::OutboundFailure {
+                        request_id,
+                        peer,
+                        error,
+                    } => {
+                        tracing::warn!(%request_id, %peer, %error, "addr query failed");
+                        if let Some(sender) = pending_addr_queries.remove(&request_id) {
+                            let _ = sender.send(vec![]);
+                        }
+                    }
+                    request_response::Event::InboundFailure { error, .. } => {
+                        tracing::warn!(%error, "addr inbound request failed");
+                    }
+                    _ => {}
+                }
+            }
             ZingBehaviourEvent::Identify(identify_event) => {
-                tracing::debug!(?identify_event, "identify event");
+                match identify_event {
+                    libp2p::identify::Event::Received { peer_id, info, .. } => {
+                        if !info.listen_addrs.is_empty() {
+                            peer_addresses.insert(peer_id, info.listen_addrs.clone());
+                        }
+                    }
+                    _ => {}
+                }
             }
             ZingBehaviourEvent::Ping(ping_event) => {
                 tracing::trace!(?ping_event, "ping event");
