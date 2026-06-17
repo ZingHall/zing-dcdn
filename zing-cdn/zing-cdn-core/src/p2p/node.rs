@@ -106,6 +106,8 @@ impl ZingP2pNode {
             .listen_on(listen_addr)
             .map_err(|e| ZingError::P2PNetwork(e.to_string()))?;
 
+        swarm.behaviour_mut().kad.set_mode(Some(kad::Mode::Server));
+
         for (peer_id, addr) in &bootstrap_addrs {
             swarm.behaviour_mut().kad.add_address(peer_id, addr.clone());
         }
