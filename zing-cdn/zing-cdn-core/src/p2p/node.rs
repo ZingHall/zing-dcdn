@@ -119,10 +119,6 @@ impl ZingP2pNode {
             }
         }
 
-        if let Err(e) = swarm.behaviour_mut().kad.bootstrap() {
-            tracing::warn!(error = %e, "kad bootstrap");
-        }
-
         let mut pending_finds: HashMap<kad::QueryId, oneshot::Sender<Vec<PeerId>>> = HashMap::new();
         let mut pending_fetches: HashMap<
             request_response::OutboundRequestId,
@@ -141,6 +137,8 @@ impl ZingP2pNode {
             oneshot::Sender<Vec<Multiaddr>>,
         > = HashMap::new();
         let mut peer_addresses: HashMap<PeerId, Vec<Multiaddr>> = HashMap::new();
+        let mut bootstrap_peers: std::collections::HashSet<PeerId> = bootstrap_addrs.iter().map(|(pid, _)| *pid).collect();
+        let mut bootstrap_done = false;
 
         loop {
             tokio::select! {
@@ -167,6 +165,8 @@ impl ZingP2pNode {
                             &mut pending_sliver_fetches,
                             &mut pending_addr_queries,
                             &mut peer_addresses,
+                            &mut bootstrap_peers,
+                            &mut bootstrap_done,
                             &store,
                         ).await,
                         None => break,
@@ -329,6 +329,8 @@ impl ZingP2pNode {
         pending_sliver_fetches: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<ZingResult<Vec<u8>>>>,
         pending_addr_queries: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<Vec<Multiaddr>>>,
         peer_addresses: &mut HashMap<PeerId, Vec<Multiaddr>>,
+        bootstrap_peers: &mut std::collections::HashSet<PeerId>,
+        bootstrap_done: &mut bool,
         store: &BlobStoreHandle,
     ) {
         match event {
@@ -351,6 +353,17 @@ impl ZingP2pNode {
             }
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                 tracing::info!(%peer_id, "P2P connection established");
+                if !*bootstrap_done && bootstrap_peers.take(&peer_id).is_some() {
+                    match swarm.behaviour_mut().kad.bootstrap() {
+                        Ok(_) => {
+                            tracing::info!("kad bootstrap initiated after connection to bootstrap peer {}", peer_id);
+                            *bootstrap_done = true;
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "kad bootstrap failed after connection to bootstrap peer {}", peer_id);
+                        }
+                    }
+                }
             }
             SwarmEvent::ConnectionClosed {
                 peer_id, cause, ..
