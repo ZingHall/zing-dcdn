@@ -142,6 +142,7 @@ impl ZingP2pNode {
         let mut bootstrap_peers: std::collections::HashSet<PeerId> = bootstrap_addrs.iter().map(|(pid, _)| *pid).collect();
         let mut bootstrap_done = false;
         let mut pending_announces: Vec<[u8; 32]> = Vec::new();
+        let mut announce_retried: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
 
         loop {
             tokio::select! {
@@ -172,6 +173,7 @@ impl ZingP2pNode {
                             &mut bootstrap_peers,
                             &mut bootstrap_done,
                             &mut pending_announces,
+                            &mut announce_retried,
                             &store,
                         ).await,
                         None => break,
@@ -204,6 +206,8 @@ impl ZingP2pNode {
                 if connected_count == 0 {
                     tracing::info!(blob_id = %hex::encode(blob_id), "No connected peers, queueing announce for retry");
                     pending_announces.push(blob_id);
+                } else {
+                    tracing::info!(blob_id = %hex::encode(blob_id), connected_peers = connected_count, "Kad start_providing dispatched");
                 }
             }
             P2pCommand::FindProviders { blob_id, reply } => {
@@ -343,6 +347,7 @@ impl ZingP2pNode {
         bootstrap_peers: &mut std::collections::HashSet<PeerId>,
         bootstrap_done: &mut bool,
         pending_announces: &mut Vec<[u8; 32]>,
+        announce_retried: &mut std::collections::HashSet<[u8; 32]>,
         store: &BlobStoreHandle,
     ) {
         match event {
@@ -356,6 +361,7 @@ impl ZingP2pNode {
                     pending_sliver_fetches,
                     pending_addr_queries,
                     peer_addresses,
+                    announce_retried,
                     store,
                 )
                 .await;
@@ -413,6 +419,7 @@ impl ZingP2pNode {
         pending_sliver_fetches: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<ZingResult<Vec<u8>>>>,
         pending_addr_queries: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<Vec<Multiaddr>>>,
         peer_addresses: &mut HashMap<PeerId, Vec<Multiaddr>>,
+        announce_retried: &mut std::collections::HashSet<[u8; 32]>,
         store: &BlobStoreHandle,
     ) {
         match event {
@@ -449,6 +456,18 @@ impl ZingP2pNode {
                             }
                             kad::QueryResult::StartProviding(Ok(ok)) => {
                                 tracing::info!(key = ?ok.key, "Kad start_providing succeeded: provider record published");
+                                let key_bytes = ok.key.to_vec();
+                                if key_bytes.len() == 32 {
+                                    let mut blob_id = [0u8; 32];
+                                    blob_id.copy_from_slice(&key_bytes);
+                                    if announce_retried.insert(blob_id) {
+                                        tracing::info!(blob_id = %hex::encode(blob_id), "Kad start_providing: scheduling immediate retry to cover fire-and-forget ADD_PROVIDER gap");
+                                        let key = kad::RecordKey::new(&blob_id);
+                                        if let Err(e) = swarm.behaviour_mut().kad.start_providing(key) {
+                                            tracing::warn!(error = %e, "Kad start_providing retry failed");
+                                        }
+                                    }
+                                }
                             }
                             kad::QueryResult::StartProviding(Err(e)) => {
                                 tracing::warn!(?id, %e, "Kad start_providing query failed");
@@ -461,6 +480,20 @@ impl ZingP2pNode {
                             }
                             _ => {
                                 tracing::debug!(?id, result = ?result, "Kad query progressed (unhandled)");
+                            }
+                        }
+                    }
+                    kad::Event::InboundRequest { request } => {
+                        match request {
+                            kad::InboundRequest::AddProvider { record } => {
+                                if let Some(rec) = record {
+                                    tracing::info!(key = ?rec.key, provider = %rec.provider, "Kad InboundRequest: received AddProvider from remote peer");
+                                } else {
+                                    tracing::info!("Kad InboundRequest: received AddProvider (record stored)");
+                                }
+                            }
+                            _ => {
+                                tracing::trace!(?request, "Kad InboundRequest (unhandled)");
                             }
                         }
                     }
