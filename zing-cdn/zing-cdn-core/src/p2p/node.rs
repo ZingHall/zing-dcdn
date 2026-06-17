@@ -4,6 +4,7 @@ use futures::stream::StreamExt;
 use libp2p::identity;
 use libp2p::kad;
 use libp2p::request_response;
+use libp2p::core::ConnectedPoint;
 use libp2p::swarm::SwarmEvent;
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder};
 use tokio::sync::mpsc;
@@ -91,6 +92,7 @@ impl ZingP2pNode {
         store: BlobStoreHandle,
         listen_addr: Multiaddr,
         bootstrap_addrs: Vec<(PeerId, Multiaddr)>,
+        external_addrs: Vec<Multiaddr>,
     ) -> ZingResult<()> {
 
         let store_for_builder = store.clone();
@@ -107,6 +109,15 @@ impl ZingP2pNode {
             .map_err(|e| ZingError::P2PNetwork(e.to_string()))?;
 
         swarm.behaviour_mut().kad.set_mode(Some(kad::Mode::Server));
+
+        // Register external addresses so that `start_providing` includes real
+        // dialable addresses in ADD_PROVIDER messages. Without this, provider
+        // records are stored on remote peers with empty `addresses`, forcing
+        // `provider_peers()` to fall back to the routing table.
+        for addr in &external_addrs {
+            swarm.add_external_address(addr.clone());
+            tracing::info!(%addr, "Registered external address for Kad provider records");
+        }
 
         for (peer_id, addr) in &bootstrap_addrs {
             swarm.behaviour_mut().kad.add_address(peer_id, addr.clone());
@@ -369,8 +380,18 @@ impl ZingP2pNode {
             SwarmEvent::NewListenAddr { address, .. } => {
                 tracing::info!(%address, "P2P listening");
             }
-            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+            SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                 tracing::info!(%peer_id, "P2P connection established");
+                // Add peer's address to Kad routing table so inbound peers are
+                // routable. Without this, provider records with empty addresses
+                // (the default for `start_providing`) cannot be resolved via
+                // the routing table fallback in `provider_peers()`.
+                let peer_addr = match &endpoint {
+                    ConnectedPoint::Dialer { address, .. } => address.clone(),
+                    ConnectedPoint::Listener { send_back_addr, .. } => send_back_addr.clone(),
+                };
+                swarm.behaviour_mut().kad.add_address(&peer_id, peer_addr.clone());
+                tracing::debug!(%peer_id, addr = %peer_addr, "Kad routing table: added peer address");
                 if !*bootstrap_done && bootstrap_peers.take(&peer_id).is_some() {
                     match swarm.behaviour_mut().kad.bootstrap() {
                         Ok(_) => {

@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use libp2p::{Multiaddr, identity};
+use libp2p::{Multiaddr, identity, PeerId};
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
@@ -37,6 +37,12 @@ struct Cli {
     #[arg(long, default_value = "/ip4/0.0.0.0/udp/34291/quic-v1")]
     listen: Multiaddr,
 
+    /// External/advertised addresses for this node (so peers can dial us back).
+    /// Used to populate Kad provider records. May be specified multiple times.
+    /// Example: --external-addr /ip4/203.0.113.5/udp/34291/quic-v1
+    #[arg(long)]
+    external_addr: Vec<Multiaddr>,
+
     /// Bootstrap peers (format: /ip4/.../udp/.../quic-v1/p2p/<peer_id>)
     #[arg(long, short = 'b')]
     bootstrap: Vec<String>,
@@ -46,7 +52,7 @@ struct Cli {
     serve: bool,
 
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -118,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!(peer_id = %p2p_peer_id, listen = %cli.listen, "starting P2P swarm");
     let p2p_store = cache_store.clone();
+    let p2p_external_addrs = cli.external_addr.clone();
     tokio::spawn(async move {
         if let Err(e) = ZingP2pNode::run(
             p2p_key,
@@ -125,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
             p2p_store,
             p2p_listen,
             bootstrap_peers,
+            p2p_external_addrs,
         )
         .await
         {
@@ -138,21 +146,26 @@ async fn main() -> anyhow::Result<()> {
         Some(p2p_command_tx.clone())
     };
 
-    match cli.command {
-        Command::Get { ref blob_id } => {
-            cmd_get(&cli, blob_id, &p2p_tx, &cache_store, &cache_pinning, &cache_eviction).await
-        }
-        Command::Cat { ref blob_id } => {
-            cmd_cat(&cli, blob_id, &p2p_tx, &cache_store, &cache_pinning, &cache_eviction).await
-        }
-        Command::Metadata { ref blob_id } => cmd_metadata(&cli, blob_id).await,
-        Command::Status { ref blob_id } => cmd_status(&cli, blob_id).await,
-        Command::Verify { ref blob_id } => cmd_verify(&cli, blob_id).await,
-        Command::List => cmd_list(&cache_store, &cache_pinning).await,
-        Command::Pin { ref blob_id } => cmd_pin(blob_id, &cache_store, &cache_pinning).await,
-        Command::Unpin { ref blob_id } => cmd_unpin(blob_id, &cache_pinning).await,
-        Command::Info { ref blob_id } => cmd_info(blob_id, &cache_store, &cache_pinning).await,
-    }?;
+    if let Some(ref cmd) = cli.command {
+        match cmd {
+            Command::Get { ref blob_id } => {
+                cmd_get(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction).await
+            }
+            Command::Cat { ref blob_id } => {
+                cmd_cat(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction).await
+            }
+            Command::Metadata { ref blob_id } => cmd_metadata(&cli, blob_id).await,
+            Command::Status { ref blob_id } => cmd_status(&cli, blob_id).await,
+            Command::Verify { ref blob_id } => cmd_verify(&cli, blob_id).await,
+            Command::List => cmd_list(&cache_store, &cache_pinning).await,
+            Command::Pin { ref blob_id } => cmd_pin(blob_id, &cache_store, &cache_pinning).await,
+            Command::Unpin { ref blob_id } => cmd_unpin(blob_id, &cache_pinning).await,
+            Command::Info { ref blob_id } => cmd_info(blob_id, &cache_store, &cache_pinning).await,
+        }?;
+    } else if !cli.serve {
+        Cli::parse_from(["--help"]);
+        std::process::exit(1);
+    }
 
     if cli.serve {
         tracing::info!("P2P node running. Press Ctrl+C to stop.");
@@ -249,6 +262,7 @@ async fn cmd_get(
     cli: &Cli,
     blob_id_str: &str,
     p2p_tx: &Option<mpsc::Sender<P2pCommand>>,
+    p2p_peer_id: &Option<PeerId>,
     cache_store: &Arc<RwLock<BlobStore>>,
     cache_pinning: &Arc<RwLock<PinningManager>>,
     cache_eviction: &Arc<RwLock<EvictionManager>>,
@@ -264,6 +278,7 @@ async fn cmd_get(
         client.walrus_client_arc(),
         Arc::new(BlobVerifier::new(client.encoding_config_arc())),
         Arc::new(RwLock::new(PeerReputationTable::new())),
+        *p2p_peer_id,
     );
     if let Some(tx) = p2p_tx {
         resolver.set_p2p_channel(tx.clone());
@@ -305,6 +320,7 @@ async fn cmd_cat(
     _cli: &Cli,
     blob_id_str: &str,
     p2p_tx: &Option<mpsc::Sender<P2pCommand>>,
+    p2p_peer_id: &Option<PeerId>,
     cache_store: &Arc<RwLock<BlobStore>>,
     cache_pinning: &Arc<RwLock<PinningManager>>,
     cache_eviction: &Arc<RwLock<EvictionManager>>,
@@ -319,6 +335,7 @@ async fn cmd_cat(
         client.walrus_client_arc(),
         Arc::new(BlobVerifier::new(client.encoding_config_arc())),
         Arc::new(RwLock::new(PeerReputationTable::new())),
+        *p2p_peer_id,
     );
     if let Some(tx) = p2p_tx {
         resolver.set_p2p_channel(tx.clone());
