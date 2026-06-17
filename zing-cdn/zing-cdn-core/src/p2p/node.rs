@@ -139,6 +139,7 @@ impl ZingP2pNode {
         let mut peer_addresses: HashMap<PeerId, Vec<Multiaddr>> = HashMap::new();
         let mut bootstrap_peers: std::collections::HashSet<PeerId> = bootstrap_addrs.iter().map(|(pid, _)| *pid).collect();
         let mut bootstrap_done = false;
+        let mut pending_announces: Vec<[u8; 32]> = Vec::new();
 
         loop {
             tokio::select! {
@@ -152,6 +153,7 @@ impl ZingP2pNode {
                         &mut pending_sliver_fetches,
                         &mut pending_addr_queries,
                         &mut peer_addresses,
+                        &mut pending_announces,
                     );
                 }
                 event = swarm.next() => {
@@ -167,6 +169,7 @@ impl ZingP2pNode {
                             &mut peer_addresses,
                             &mut bootstrap_peers,
                             &mut bootstrap_done,
+                            &mut pending_announces,
                             &store,
                         ).await,
                         None => break,
@@ -187,12 +190,18 @@ impl ZingP2pNode {
         pending_sliver_fetches: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<ZingResult<Vec<u8>>>>,
         pending_addr_queries: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<Vec<Multiaddr>>>,
         peer_addresses: &HashMap<PeerId, Vec<Multiaddr>>,
+        pending_announces: &mut Vec<[u8; 32]>,
     ) {
         match cmd {
             P2pCommand::AnnounceBlob { blob_id } => {
                 let key = kad::RecordKey::new(&blob_id);
                 if let Err(e) = swarm.behaviour_mut().kad.start_providing(key) {
                     tracing::warn!(error = %e, "Kad start_providing failed");
+                }
+                let connected_count = swarm.connected_peers().count();
+                if connected_count == 0 {
+                    tracing::info!(blob_id = %hex::encode(blob_id), "No connected peers, queueing announce for retry");
+                    pending_announces.push(blob_id);
                 }
             }
             P2pCommand::FindProviders { blob_id, reply } => {
@@ -331,6 +340,7 @@ impl ZingP2pNode {
         peer_addresses: &mut HashMap<PeerId, Vec<Multiaddr>>,
         bootstrap_peers: &mut std::collections::HashSet<PeerId>,
         bootstrap_done: &mut bool,
+        pending_announces: &mut Vec<[u8; 32]>,
         store: &BlobStoreHandle,
     ) {
         match event {
@@ -361,6 +371,17 @@ impl ZingP2pNode {
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, "kad bootstrap failed after connection to bootstrap peer {}", peer_id);
+                        }
+                    }
+                }
+                if !pending_announces.is_empty() {
+                    let announces: Vec<[u8; 32]> = pending_announces.drain(..).collect();
+                    for bid in announces {
+                        let key = kad::RecordKey::new(&bid);
+                        if let Err(e) = swarm.behaviour_mut().kad.start_providing(key) {
+                            tracing::warn!(error = %e, "Kad start_providing retry failed");
+                        } else {
+                            tracing::info!(blob_id = %hex::encode(bid), "Kad start_providing retry sent");
                         }
                     }
                 }
