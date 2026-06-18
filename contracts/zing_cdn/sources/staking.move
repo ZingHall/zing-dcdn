@@ -48,6 +48,16 @@ fun init(ctx: &mut TxContext) {
     transfer::transfer(AdminCap { id: object::new(ctx) }, ctx.sender());
 }
 
+#[test_only]
+/// Test helper: initializes staking without calling private module init.
+public fun init_for_testing(ctx: &mut TxContext) {
+    transfer::share_object(Registry {
+        id: object::new(ctx),
+        peers: table::new(ctx),
+    });
+    transfer::transfer(AdminCap { id: object::new(ctx) }, ctx.sender());
+}
+
 // ===== Peer registration =====
 
 /// Register as a peer with minimum required bond.

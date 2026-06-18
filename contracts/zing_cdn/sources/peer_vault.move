@@ -223,6 +223,16 @@ public fun commission_bps(vault: &PeerVault): u64 {
     vault.commission_bps
 }
 
+// ===== ShareCertificate accessors =====
+
+public fun cert_shares(cert: &ShareCertificate): u64 {
+    cert.shares
+}
+
+public fun cert_vault_id(cert: &ShareCertificate): ID {
+    cert.vault_id
+}
+
 // ===== Events =====
 
 public struct DelegateEvent has copy, drop {

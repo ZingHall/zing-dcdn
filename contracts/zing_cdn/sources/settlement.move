@@ -17,8 +17,6 @@ use zing_cdn::peer_vault;
 /// Max read price: 1 WAL per MB (1_000_000_000 frost/MB)
 const MAX_READ_PRICE_PER_MB: u64 = 1_000_000_000;
 
-// ===== Shared object =====
-
 /// Global settlement contract. Admin can update the read price to track
 /// WAL/USD rate and maintain target ~$0.0023/GB (= write_price / 10).
 public struct Settlement has key {
@@ -36,8 +34,16 @@ public struct AdminCap has key {
 fun init(ctx: &mut TxContext) {
     transfer::share_object(Settlement {
         id: object::new(ctx),
-        // Default: 1000 frost/MB (= 0.000001 WAL/MB, ~$0.0023/GB at $2.30/WAL)
-        // Admin updates this when WAL/USD changes.
+        read_price_per_mb: 1_000,
+    });
+    transfer::transfer(AdminCap { id: object::new(ctx) }, ctx.sender());
+}
+
+#[test_only]
+/// Test helper: initializes settlement without calling private module init.
+public fun init_for_testing(ctx: &mut TxContext) {
+    transfer::share_object(Settlement {
+        id: object::new(ctx),
         read_price_per_mb: 1_000,
     });
     transfer::transfer(AdminCap { id: object::new(ctx) }, ctx.sender());
@@ -119,3 +125,5 @@ public struct ReadPriceUpdatedEvent has copy, drop {
 // ===== Error codes =====
 
 const EB_ZERO_PAYMENT: u64 = 0;
+
+
