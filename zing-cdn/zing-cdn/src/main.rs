@@ -141,6 +141,17 @@ async fn main() -> anyhow::Result<()> {
     };
     let sui_address_bytes = wallet.as_ref().map(|w| w.address().to_inner());
 
+    let vault_object_id_bytes: Option<[u8; 32]> = cli.vault_object.as_ref()
+        .and_then(|v| {
+            let hex_str = v.strip_prefix("0x").unwrap_or(v);
+            if hex_str.len() != 64 { return None; }
+            let mut bytes = [0u8; 32];
+            for i in 0..32 {
+                bytes[i] = u8::from_str_radix(&hex_str[i*2..i*2+2], 16).ok()?;
+            }
+            Some(bytes)
+        });
+
     let settlement_config: Option<SettlementConfig> = match (
         &cli.settlement_package,
         &cli.settlement_object,
@@ -198,7 +209,7 @@ async fn main() -> anyhow::Result<()> {
             bootstrap_peers,
             p2p_external_addrs,
             sui_address_bytes,
-            None,
+            vault_object_id_bytes,
         )
         .await
         {
