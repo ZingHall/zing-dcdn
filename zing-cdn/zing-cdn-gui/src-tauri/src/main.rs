@@ -139,17 +139,17 @@ fn main() {
             let p2p_key = p2p_node.key().clone();
             let peer_id = p2p_node.local_peer_id();
 
-            let keystore_path = std::env::var("ZING_SUI_KEYSTORE")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".sui").join("sui_config"));
+            let keystore_path: Option<std::path::PathBuf> = std::env::var("ZING_SUI_KEYSTORE")
+                .ok()
+                .map(std::path::PathBuf::from);
             let wallet: Option<Arc<ZingWallet>> = {
-                match tauri::async_runtime::block_on(ZingWallet::from_keystore(&keystore_path)) {
+                match tauri::async_runtime::block_on(ZingWallet::from_keystore(keystore_path.as_deref())) {
                     Ok(w) => {
                         tracing::info!(address = %w.address(), "Sui wallet loaded for WAL payments");
                         Some(Arc::new(w))
                     }
                     Err(e) => {
-                        tracing::warn!(path = %keystore_path.display(), %e, "Sui wallet not available — running without WAL payments");
+                        tracing::warn!(%e, "Sui wallet not available — running without WAL payments");
                         None
                     }
                 }

@@ -23,10 +23,12 @@ pub struct ZingWallet {
 
 impl ZingWallet {
     /// Load a wallet from a Sui CLI keystore directory (typically ~/.sui/sui_config/).
+    /// Pass `None` to auto-discover the config file. Pass `Some(path)` to use a
+    /// specific client.yaml file.
     pub async fn from_keystore(
-        keystore_path: &Path,
+        keystore_path: Option<&Path>,
     ) -> ZingResult<Self> {
-        let wallet = load_wallet_context_from_path(Some(keystore_path), None)
+        let wallet = load_wallet_context_from_path(keystore_path, None)
             .map_err(|e| ZingError::SuiClient(format!("failed to load wallet: {}", e)))?;
 
         let address = wallet.active_address();

@@ -52,10 +52,10 @@ struct Cli {
     #[arg(long)]
     serve: bool,
 
-    /// Path to Sui CLI keystore directory for WAL token payments
-    /// (default: ~/.sui/sui_config/)
-    #[arg(long, default_value = "~/.sui/sui_config/")]
-    sui_keystore: String,
+    /// Path to Sui CLI keystore config file for WAL token payments
+    /// (default: auto-discovers ~/.sui/sui_config/client.yaml)
+    #[arg(long)]
+    sui_keystore: Option<String>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -115,14 +115,14 @@ async fn main() -> anyhow::Result<()> {
     let keypair = load_or_generate_keypair(&cache_dir);
     tracing::info!(peer_id = %keypair.public().to_peer_id(), "P2P keypair loaded");
 
-    let keystore_path = resolve_cache_dir(&cli.sui_keystore);
-    let wallet: Option<Arc<ZingWallet>> = match ZingWallet::from_keystore(&keystore_path).await {
+    let keystore_path = cli.sui_keystore.as_ref().map(|s| resolve_cache_dir(s));
+    let wallet: Option<Arc<ZingWallet>> = match ZingWallet::from_keystore(keystore_path.as_deref()).await {
         Ok(w) => {
             tracing::info!(address = %w.address(), "Sui wallet loaded for WAL payments");
             Some(Arc::new(w))
         }
         Err(e) => {
-            tracing::warn!(path = %keystore_path.display(), %e, "Sui wallet not available — running without WAL payments");
+            tracing::warn!(%e, "Sui wallet not available — running without WAL payments");
             None
         }
     };
