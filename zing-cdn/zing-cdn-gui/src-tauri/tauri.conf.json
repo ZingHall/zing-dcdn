@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/nicedoc/tauri/HEAD/core/tauri-config-schema/schema.json",
   "productName": "zing-cdn",
   "version": "0.1.0",
-  "identifier": "com.zing-cdn.app",
+  "identifier": "com.zing-cdn.desktop",
   "build": {
     "frontendDist": "../target/dx/zing_cdn_gui/debug/web/public",
     "beforeBuildCommand": "",

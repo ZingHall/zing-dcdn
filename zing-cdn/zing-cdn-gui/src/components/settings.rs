@@ -15,7 +15,7 @@ fn default_peers() -> ipc::PeersInfo {
 pub fn Settings() -> Element {
     let mut input_addr = use_signal(|| String::new());
     let mut status = use_signal(|| String::new());
-    let mut peers_info = use_resource(|| async move {
+    let peers_info = use_resource(|| async move {
         ipc::list_peers().await.ok()
     });
 
@@ -24,7 +24,20 @@ pub fn Settings() -> Element {
         Some(Some(p)) => p.clone(),
         _ => default_peers(),
     };
-    // guard not dropped — subscription stays alive through rsx!
+    drop(guard);
+
+    // Auto-refresh every 3 seconds
+    {
+        let mut peers_info = peers_info.clone();
+        use_effect(move || {
+            spawn(async move {
+                loop {
+                    gloo_timers::future::TimeoutFuture::new(3000).await;
+                    peers_info.restart();
+                }
+            });
+        });
+    }
 
     let status_text = status.read().clone();
     let listen = info.listen_addr.clone();
@@ -65,7 +78,6 @@ pub fn Settings() -> Element {
                                     Ok(()) => {
                                         status.set("Added".into());
                                         input_addr.set(String::new());
-                                        peers_info.restart();
                                     }
                                     Err(e) => status.set(format!("Error: {e}")),
                                 }
@@ -92,7 +104,6 @@ pub fn Settings() -> Element {
                                         let a = a.clone();
                                         spawn(async move {
                                             let _ = ipc::remove_peer(&a).await;
-                                            peers_info.restart();
                                         });
                                     }
                                 },
