@@ -5,14 +5,22 @@ use crate::walrus::client::WalrusL3Client;
 use crate::walrus::verify::BlobVerifier;
 use crate::mesh::reputation::PeerReputationTable;
 use crate::types::{ZingResult, BlobResolution};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use libp2p::PeerId;
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 use walrus_core::BlobId;
 
 use crate::p2p::node::P2pCommand;
+use crate::sui::wallet::ZingWallet;
+use sui_sdk::types::base_types::SuiAddress;
+
+const READ_FEE_WAL_NANOS: u64 = 1_000_000;
+const FEE_PER_BYTE_NANOS: u64 = 1;
 
 pub struct Resolver {
     store: Arc<RwLock<BlobStore>>,
@@ -23,6 +31,8 @@ pub struct Resolver {
     reputation: Arc<RwLock<PeerReputationTable>>,
     p2p_command_tx: Option<mpsc::Sender<P2pCommand>>,
     local_peer_id: Option<PeerId>,
+    wallet: Option<Arc<ZingWallet>>,
+    sui_addr_cache: Arc<Mutex<HashMap<PeerId, Option<[u8; 32]>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,11 +61,81 @@ impl Resolver {
             reputation,
             p2p_command_tx: None,
             local_peer_id,
+            wallet: None,
+            sui_addr_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     pub fn set_p2p_channel(&mut self, tx: mpsc::Sender<P2pCommand>) {
         self.p2p_command_tx = Some(tx);
+    }
+
+    pub fn set_wallet(&mut self, wallet: Arc<ZingWallet>) {
+        self.wallet = Some(wallet);
+    }
+
+    async fn resolve_payment(
+        &self,
+        peer_id: &PeerId,
+        tx: &mpsc::Sender<P2pCommand>,
+        amount_nanos: u64,
+    ) -> [u8; 32] {
+        let wallet = match &self.wallet {
+            Some(w) => w,
+            None => return [0u8; 32],
+        };
+
+        {
+            let cache = self.sui_addr_cache.lock().await;
+            if let Some(cached) = cache.get(peer_id) {
+                return match cached {
+                    Some(addr) => {
+                        let recipient = match SuiAddress::from_bytes(*addr) {
+                            Ok(a) => a,
+                            Err(e) => {
+                                tracing::warn!(?addr, %e, "Invalid Sui address in cache");
+                                return [0u8; 32];
+                            }
+                        };
+                        wallet.pay_wal(recipient, amount_nanos).await.unwrap_or_else(|e| {
+                            tracing::warn!(%e, "Payment proof generation failed");
+                            [0u8; 32]
+                        })
+                    }
+                    None => [0u8; 32],
+                };
+            }
+        }
+
+        let (reply, rx) = oneshot::channel();
+        if tx.send(P2pCommand::GetPeerSuiAddress { peer_id: *peer_id, reply }).await.is_err() {
+            self.sui_addr_cache.lock().await.insert(*peer_id, None);
+            return [0u8; 32];
+        }
+        let result = tokio::time::timeout(Duration::from_secs(5), rx)
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .flatten();
+
+        self.sui_addr_cache.lock().await.insert(*peer_id, result);
+
+        match result {
+            None => [0u8; 32],
+            Some(addr) => {
+                let recipient = match SuiAddress::from_bytes(addr) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        tracing::warn!(?addr, %e, "Invalid Sui address from DHT");
+                        return [0u8; 32];
+                    }
+                };
+                wallet.pay_wal(recipient, amount_nanos).await.unwrap_or_else(|e| {
+                    tracing::warn!(%e, "Payment proof generation failed");
+                    [0u8; 32]
+                })
+            }
+        }
     }
 
     pub async fn resolve(&self, blob_id: &BlobId) -> ZingResult<ResolveResult> {
@@ -181,7 +261,7 @@ impl Resolver {
         if tx.send(P2pCommand::FetchBlob {
             peer_id: peer,
             blob_id: blob_id.0,
-            payment_tx_digest: [0u8; 32],
+            payment_tx_digest: self.resolve_payment(&peer, tx, READ_FEE_WAL_NANOS).await,
             reply: fetch_reply,
         }).await.is_err() {
             return None;
@@ -217,7 +297,7 @@ impl Resolver {
             if tx.send(P2pCommand::FetchBlob {
                 peer_id: *peer,
                 blob_id: blob_id.0,
-                payment_tx_digest: [0u8; 32],
+                payment_tx_digest: self.resolve_payment(peer, tx, READ_FEE_WAL_NANOS).await,
                 reply: fetch_reply,
             }).await.is_err() {
                 continue;
@@ -259,7 +339,7 @@ impl Resolver {
                 blob_id: blob_id.0,
                 offset: 0,
                 length: RANGE_CHUNK,
-                payment_tx_digest: [0u8; 32],
+                payment_tx_digest: self.resolve_payment(peer, tx, RANGE_CHUNK * FEE_PER_BYTE_NANOS).await,
                 reply: fetch_reply,
             }).await.is_err() {
                 continue;
@@ -291,7 +371,7 @@ impl Resolver {
                     blob_id: blob_id.0,
                     offset,
                     length: RANGE_CHUNK,
-                    payment_tx_digest: [0u8; 32],
+                    payment_tx_digest: self.resolve_payment(peer, tx, RANGE_CHUNK * FEE_PER_BYTE_NANOS).await,
                     reply: next_reply,
                 }).await.is_err() {
                     break;
@@ -351,7 +431,7 @@ impl Resolver {
                 blob_id: blob_id.0,
                 offset: 0,
                 length: 8,
-                payment_tx_digest: [0u8; 32],
+                payment_tx_digest: self.resolve_payment(peer, tx, 8 * FEE_PER_BYTE_NANOS).await,
                 reply: fetch_reply,
             }).await.is_err() {
                 continue;
@@ -393,7 +473,7 @@ impl Resolver {
                     blob_id: blob_id.0,
                     offset,
                     length: CHUNK_SIZE,
-                    payment_tx_digest: [0u8; 32],
+                    payment_tx_digest: self.resolve_payment(peer, tx, CHUNK_SIZE * FEE_PER_BYTE_NANOS).await,
                     reply: fetch_reply,
                 }).await.is_err() {
                     continue;
