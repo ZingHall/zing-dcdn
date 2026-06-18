@@ -19,13 +19,13 @@ const MIN_STAKE: u64 = 1_000_000_000_000;
 // ===== Shared objects =====
 
 /// Global registry of all registered peers.
-public struct Registry has key {
+public struct Registry has key, store {
     id: UID,
     peers: Table<address, ID>,   // sui_address → Peer object ID
 }
 
 /// A registered peer's staking position (the security bond).
-public struct Peer has key {
+public struct Peer has key, store {
     id: UID,
     peer_id: vector<u8>,         // libp2p PeerId bytes
     sui_address: address,        // peer's Sui wallet (registered by)
@@ -34,14 +34,14 @@ public struct Peer has key {
 }
 
 /// Capability for admin operations (slash, deactivate).
-public struct AdminCap has key {
+public struct AdminCap has key, store {
     id: UID,
 }
 
 // ===== Init =====
 
 fun init(ctx: &mut TxContext) {
-    transfer::share_object(Registry {
+    transfer::public_share_object(Registry {
         id: object::new(ctx),
         peers: table::new(ctx),
     });
@@ -51,7 +51,7 @@ fun init(ctx: &mut TxContext) {
 #[test_only]
 /// Test helper: initializes staking without calling private module init.
 public fun init_for_testing(ctx: &mut TxContext) {
-    transfer::share_object(Registry {
+    transfer::public_share_object(Registry {
         id: object::new(ctx),
         peers: table::new(ctx),
     });
@@ -82,7 +82,7 @@ public fun register(
 
     let peer_id_obj = object::id(&peer);
     table::add(&mut registry.peers, sender, peer_id_obj);
-    transfer::share_object(peer);
+    transfer::public_share_object(peer);
 
     event::emit(RegisterEvent {
         peer: sender,

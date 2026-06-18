@@ -19,20 +19,20 @@ const MAX_READ_PRICE_PER_MB: u64 = 1_000_000_000;
 
 /// Global settlement contract. Admin can update the read price to track
 /// WAL/USD rate and maintain target ~$0.0023/GB (= write_price / 10).
-public struct Settlement has key {
+public struct Settlement has key, store {
     id: UID,
     read_price_per_mb: u64,        // WAL frost per megabyte read
 }
 
 /// Cap for admin to update the read price.
-public struct AdminCap has key {
+public struct AdminCap has key, store {
     id: UID,
 }
 
 // ===== Init =====
 
 fun init(ctx: &mut TxContext) {
-    transfer::share_object(Settlement {
+    transfer::public_share_object(Settlement {
         id: object::new(ctx),
         read_price_per_mb: 1_000,
     });
@@ -42,7 +42,7 @@ fun init(ctx: &mut TxContext) {
 #[test_only]
 /// Test helper: initializes settlement without calling private module init.
 public fun init_for_testing(ctx: &mut TxContext) {
-    transfer::share_object(Settlement {
+    transfer::public_share_object(Settlement {
         id: object::new(ctx),
         read_price_per_mb: 1_000,
     });

@@ -24,7 +24,7 @@ use zing_cdn::utils;
 
 /// A per-peer vault. Created once by a peer to accept delegated WAL
 /// and accumulate settlement rewards.
-public struct PeerVault has key {
+public struct PeerVault has key, store {
     id: UID,
     peer_address: address,          // peer who owns this vault
     reserves: Balance<WAL>,         // total WAL (delegations + rewards)
@@ -52,7 +52,7 @@ public fun create_vault(
 ) {
     assert!(commission_bps <= 10000, EB_INVALID_COMMISSION);
 
-    transfer::share_object(PeerVault {
+    transfer::public_share_object(PeerVault {
         id: object::new(ctx),
         peer_address,
         reserves: balance::zero<WAL>(),
