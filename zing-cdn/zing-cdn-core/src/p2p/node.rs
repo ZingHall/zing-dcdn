@@ -15,6 +15,7 @@ use crate::p2p::behaviour::ZingBehaviourEvent;
 use crate::p2p::handler::{handle_inbound_range_request, handle_inbound_sliver_request, handle_inbound_request, BlobStoreHandle};
 use crate::p2p::protocol::{BlobRequest, RangeRequest, SliverRequest, AddrRequest, AddrResponse};
 use crate::types::{ZingError, ZingResult};
+use walrus_core::BlobId;
 
 #[derive(Debug)]
 pub enum P2pCommand {
@@ -392,14 +393,31 @@ impl ZingP2pNode {
                 };
                 swarm.behaviour_mut().kad.add_address(&peer_id, peer_addr.clone());
                 tracing::debug!(%peer_id, addr = %peer_addr, "Kad routing table: added peer address");
-                if !*bootstrap_done && bootstrap_peers.take(&peer_id).is_some() {
-                    match swarm.behaviour_mut().kad.bootstrap() {
-                        Ok(_) => {
-                            tracing::info!("kad bootstrap initiated after connection to bootstrap peer {}", peer_id);
-                            *bootstrap_done = true;
+                if bootstrap_peers.contains(&peer_id) {
+                    if !*bootstrap_done {
+                        match swarm.behaviour_mut().kad.bootstrap() {
+                            Ok(_) => {
+                                tracing::info!("kad bootstrap initiated after connection to bootstrap peer {}", peer_id);
+                                *bootstrap_done = true;
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "kad bootstrap failed after connection to bootstrap peer {}", peer_id);
+                            }
                         }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "kad bootstrap failed after connection to bootstrap peer {}", peer_id);
+                    } else {
+                        // Reconnected to bootstrap peer — re-announce all cached blobs
+                        // in case Fly restarted and lost MemoryStore provider records.
+                        if let Ok(ids) = store.read().await.list_blob_ids() {
+                            for id_str in &ids {
+                                if let Ok(blob_id) = id_str.parse::<BlobId>() {
+                                    let key = kad::RecordKey::new(&blob_id.0);
+                                    if let Err(e) = swarm.behaviour_mut().kad.start_providing(key) {
+                                        tracing::warn!(blob_id = %id_str, error = %e, "Kad start_providing re-announce failed");
+                                    } else {
+                                        tracing::info!(blob_id = %id_str, "Kad start_providing re-announced on reconnect");
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -719,6 +737,14 @@ impl ZingP2pNode {
                 match identify_event {
                     libp2p::identify::Event::Received { peer_id, info, .. } => {
                         if !info.listen_addrs.is_empty() {
+                            // Add the peer's actual listen addresses to the Kad routing table.
+                            // This gives the Kad DHT the real dialable addresses, superseding
+                            // the NAT-mapped send_back_addr (often an ephemeral source port)
+                            // that was added via ConnectionEstablished.
+                            for addr in &info.listen_addrs {
+                                swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+                                tracing::debug!(%peer_id, %addr, "Kad routing table: added peer listen address from Identify");
+                            }
                             peer_addresses.insert(peer_id, info.listen_addrs.clone());
                         }
                     }
