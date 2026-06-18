@@ -154,7 +154,7 @@ impl ZingWallet {
             .map_err(|e| ZingError::SuiClient(format!("gas: {}", e)))?
             .ok_or_else(|| ZingError::SuiClient("no gas coins".into()))?;
 
-        let min_bond = 1_000_000_000_000u64;
+        let min_bond = 1_000_000_000u64;  // 1 WAL in frost
         let wal_type = &settlement.wal_coin_type;
         let wal_coins = sui_client
             .coin_read_api()

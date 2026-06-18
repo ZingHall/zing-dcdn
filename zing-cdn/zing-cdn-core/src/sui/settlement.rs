@@ -22,7 +22,7 @@ impl SettlementConfig {
     /// Creates a SettlementConfig with mainnet addresses.
     pub fn mainnet(vault_object_id: ObjectID) -> Self {
         Self {
-            package_id: "0x9dd1a5dc551e322dd1b0394514ece30eb1e5f54d5de5b1f6fe135ebe24032b9c"
+            package_id: "0xc584ff1d0d76f4da6aa3b9115263f248e1b0cf60b37d0fc96d2b49b2b72997c8"
                 .parse()
                 .expect("invalid package_id"),
             settlement_object_id: "0xc58e9b7417fdc83743b46a3f9009b10868f05bb1f2283f08c7021ac3e7f6c308"
