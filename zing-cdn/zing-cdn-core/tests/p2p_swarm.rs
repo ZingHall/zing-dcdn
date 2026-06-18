@@ -29,7 +29,7 @@ async fn test_p2p_node_starts_and_listens() {
         .expect("valid multiaddr");
 
     let handle = tokio::spawn(async move {
-        ZingP2pNode::run(key, cmd_rx, store, listen_addr, vec![], vec![], None).await
+        ZingP2pNode::run(key, cmd_rx, store, listen_addr, vec![], vec![], None, None).await
     });
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -52,7 +52,7 @@ async fn test_p2p_node_announce_blob() {
         .expect("valid multiaddr");
 
     let handle = tokio::spawn(async move {
-        ZingP2pNode::run(key, cmd_rx, store, listen_addr, vec![], vec![], None).await
+        ZingP2pNode::run(key, cmd_rx, store, listen_addr, vec![], vec![], None, None).await
     });
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -104,7 +104,7 @@ async fn test_node_to_node_blob_transfer() {
     let listen_a_for_b = listen_a.clone();
     let store_a_clone = store_a.clone();
     let join_a = tokio::spawn(async move {
-        let _ = ZingP2pNode::run(key_a, rx_a, store_a_clone, listen_a, vec![], vec![], None).await;
+        let _ = ZingP2pNode::run(key_a, rx_a, store_a_clone, listen_a, vec![], vec![], None, None).await;
     });
 
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -119,7 +119,7 @@ async fn test_node_to_node_blob_transfer() {
     let listen_b: Multiaddr = "/ip4/127.0.0.1/udp/19002/quic-v1".parse().expect("addr");
     let store_b_clone = store_b.clone();
     let join_b = tokio::spawn(async move {
-        let _ = ZingP2pNode::run(key_b, rx_b, store_b_clone, listen_b.clone(), vec![], vec![], None).await;
+        let _ = ZingP2pNode::run(key_b, rx_b, store_b_clone, listen_b.clone(), vec![], vec![], None, None).await;
     });
 
     tokio::time::sleep(Duration::from_secs(2)).await;

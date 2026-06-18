@@ -198,6 +198,7 @@ async fn main() -> anyhow::Result<()> {
             bootstrap_peers,
             p2p_external_addrs,
             sui_address_bytes,
+            None,
         )
         .await
         {

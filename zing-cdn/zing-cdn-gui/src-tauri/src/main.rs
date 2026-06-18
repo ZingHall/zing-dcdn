@@ -226,7 +226,7 @@ fn main() {
             // Spawn P2P background task with loaded bootstrap peers
             tauri::async_runtime::spawn(async move {
                 let _ = ZingP2pNode::run(
-                    p2p_key, command_rx, store, listen_addr, bootstrap_addrs, external_addrs, sui_address_bytes,
+                    p2p_key, command_rx, store, listen_addr, bootstrap_addrs, external_addrs, sui_address_bytes, None,
                 ).await;
             });
 
