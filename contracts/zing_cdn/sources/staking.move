@@ -58,6 +58,26 @@ public fun init_for_testing(ctx: &mut TxContext) {
     transfer::transfer(AdminCap { id: object::new(ctx) }, ctx.sender());
 }
 
+#[test_only]
+public fun register_for_testing(
+    registry: &mut Registry,
+    peer_id: vector<u8>,
+    bond: Coin<WAL>,
+    ctx: &mut TxContext,
+) {
+    register(registry, peer_id, bond, ctx);
+}
+
+#[test_only]
+public fun slash_for_testing(
+    cap: &AdminCap,
+    peer: &mut Peer,
+    amount: u64,
+    ctx: &mut TxContext,
+) {
+    slash(cap, peer, amount, ctx);
+}
+
 // ===== Peer registration =====
 
 /// Register as a peer with minimum required bond.

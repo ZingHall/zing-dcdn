@@ -260,6 +260,112 @@ public struct EarningsClaimedEvent has copy, drop {
     amount: u64,
 }
 
+// ===== Test helpers =====
+
+#[test_only]
+public fun create_vault_for_testing(
+    peer_address: address,
+    commission_bps: u64,
+    ctx: &mut TxContext,
+) {
+    create_vault(peer_address, commission_bps, ctx);
+}
+
+#[test_only]
+public fun delegate_for_testing(
+    vault: &mut PeerVault,
+    coin: Coin<WAL>,
+    ctx: &mut TxContext,
+) {
+    let wal_amount = coin::value(&coin);
+    assert!(wal_amount > 0, EB_ZERO_AMOUNT);
+
+    let shares = if (vault.total_shares == 0) {
+        wal_amount
+    } else {
+        utils::mul_div(wal_amount, vault.total_shares, balance::value(&vault.reserves))
+    };
+    assert!(shares > 0, EB_ZERO_SHARES);
+
+    balance::join(&mut vault.reserves, coin::into_balance(coin));
+    vault.total_shares = vault.total_shares + shares;
+
+    event::emit(DelegateEvent {
+        delegator: ctx.sender(),
+        peer: vault.peer_address,
+        wal_amount,
+        shares,
+    });
+
+    transfer::public_transfer(
+        ShareCertificate {
+            id: object::new(ctx),
+            vault_id: object::id(vault),
+            shares,
+        },
+        ctx.sender(),
+    );
+}
+
+#[test_only]
+public fun undelegate_for_testing(
+    vault: &mut PeerVault,
+    cert: ShareCertificate,
+    ctx: &mut TxContext,
+) {
+    assert!(object::id(vault) == cert.vault_id, EB_WRONG_VAULT);
+
+    let shares = cert.shares;
+    assert!(shares > 0, EB_ZERO_AMOUNT);
+
+    let wal_amount = utils::mul_div(
+        shares,
+        balance::value(&vault.reserves),
+        vault.total_shares,
+    );
+
+    vault.total_shares = vault.total_shares - shares;
+    let withdrawn = balance::split(&mut vault.reserves, wal_amount);
+
+    let ShareCertificate { id, vault_id: _, shares: _ } = cert;
+    object::delete(id);
+
+    event::emit(UndelegateEvent {
+        delegator: ctx.sender(),
+        peer: vault.peer_address,
+        shares,
+        wal_amount,
+    });
+
+    transfer::public_transfer(
+        coin::from_balance(withdrawn, ctx),
+        ctx.sender(),
+    );
+}
+
+#[test_only]
+public fun claim_earnings_for_testing(
+    vault: &mut PeerVault,
+    ctx: &mut TxContext,
+) {
+    assert!(ctx.sender() == vault.peer_address, EB_NOT_VAULT_OWNER);
+
+    let amount = balance::value(&vault.peer_earnings);
+    assert!(amount > 0, EB_NO_EARNINGS);
+
+    let withdrawn = balance::split(&mut vault.peer_earnings, amount);
+
+    event::emit(EarningsClaimedEvent {
+        peer: vault.peer_address,
+        amount,
+    });
+
+    transfer::public_transfer(
+        coin::from_balance(withdrawn, ctx),
+        ctx.sender(),
+    );
+}
+
 // ===== Error codes =====
 
 const EB_ZERO_AMOUNT: u64 = 101;

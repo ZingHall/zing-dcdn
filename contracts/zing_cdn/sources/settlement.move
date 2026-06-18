@@ -49,6 +49,18 @@ public fun init_for_testing(ctx: &mut TxContext) {
     transfer::transfer(AdminCap { id: object::new(ctx) }, ctx.sender());
 }
 
+#[test_only]
+public fun pay_for_testing(
+    settlement: &Settlement,
+    vault: &mut peer_vault::PeerVault,
+    payee: address,
+    blob_hash: vector<u8>,
+    coin: coin::Coin<WAL>,
+    ctx: &mut TxContext,
+) {
+    pay(settlement, vault, payee, blob_hash, coin, ctx);
+}
+
 // ===== Payment =====
 
 /// Client pays WAL for a blob fetch from a specific peer.
