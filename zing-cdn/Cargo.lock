@@ -15491,6 +15491,7 @@ dependencies = [
  "serde_bytes",
  "serde_json",
  "sha2 0.10.9",
+ "sui-sdk",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -15500,6 +15501,7 @@ dependencies = [
  "walrus-sdk",
  "walrus-storage-node-client",
  "walrus-sui",
+ "walrus-utils",
 ]
 
 [[package]]

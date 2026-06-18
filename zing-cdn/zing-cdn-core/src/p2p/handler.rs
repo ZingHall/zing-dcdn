@@ -17,9 +17,9 @@ pub async fn handle_inbound_request(
 ) -> BlobResponse {
     let blob_id_str = BlobId(request.blob_id).to_string();
     if request.payment_tx_digest == [0u8; 32] {
-        tracing::info!(blob_id = %blob_id_str, "handling inbound blob request (no payment)");
+        tracing::debug!(blob_id = %blob_id_str, "handling inbound blob request (no payment)");
     } else {
-        tracing::info!(blob_id = %blob_id_str, tx_digest = %hex::encode(request.payment_tx_digest), "handling inbound blob request (paid)");
+        tracing::debug!(blob_id = %blob_id_str, tx_digest = %hex::encode(request.payment_tx_digest), "handling inbound blob request (paid)");
     }
 
     let store = store.read().await;
@@ -44,6 +44,11 @@ pub async fn handle_inbound_range_request(
     request: RangeRequest,
 ) -> RangeResponse {
     let blob_id_str = BlobId(request.blob_id).to_string();
+    if request.payment_tx_digest == [0u8; 32] {
+        tracing::debug!(blob_id = %blob_id_str, "handling inbound range request (no payment)");
+    } else {
+        tracing::debug!(blob_id = %blob_id_str, tx_digest = %hex::encode(request.payment_tx_digest), "handling inbound range request (paid)");
+    }
 
     let store = store.read().await;
     let data = match store.get(&blob_id_str) {

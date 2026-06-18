@@ -1,9 +1,8 @@
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use sha2::{Digest, Sha256};
 use sui_sdk::types::base_types::SuiAddress;
-use walrus_sui::client::SuiReadClient;
 use walrus_sui::config::load_wallet_context_from_path;
 
 use crate::types::{ZingError, ZingResult};
@@ -19,16 +18,13 @@ pub type PaymentProof = [u8; 32];
 /// using sui-sdk's SuiClient for coin transfers.
 pub struct ZingWallet {
     address: SuiAddress,
-    #[allow(dead_code)]
-    read_client: Arc<SuiReadClient>,
-    payment_counter: u64,
+    payment_counter: AtomicU64,
 }
 
 impl ZingWallet {
     /// Load a wallet from a Sui CLI keystore directory (typically ~/.sui/sui_config/).
     pub async fn from_keystore(
         keystore_path: &Path,
-        read_client: Arc<SuiReadClient>,
     ) -> ZingResult<Self> {
         let wallet = load_wallet_context_from_path(Some(keystore_path), None)
             .map_err(|e| ZingError::SuiClient(format!("failed to load wallet: {}", e)))?;
@@ -37,17 +33,12 @@ impl ZingWallet {
 
         tracing::info!(%address, "Sui wallet loaded successfully");
 
-        Ok(Self { address, read_client, payment_counter: 0 })
+        Ok(Self { address, payment_counter: AtomicU64::new(0) })
     }
 
     /// Returns this wallet's Sui address (32 bytes).
     pub fn address(&self) -> SuiAddress {
         self.address
-    }
-
-    /// Check if the wallet is configured (always true if loaded).
-    pub fn is_configured(&self) -> bool {
-        true
     }
 
     /// Generates a payment proof for a WAL transfer.
@@ -56,30 +47,25 @@ impl ZingWallet {
     /// a synthetic payment proof (a hash of the payment details) that
     /// the serving peer can log/verify. On-chain execution will be
     /// added in a follow-up.
-    pub async fn pay_wal(&mut self, recipient: SuiAddress, amount_nanos: u64) -> ZingResult<PaymentProof> {
-        self.payment_counter += 1;
+    pub async fn pay_wal(&self, recipient: SuiAddress, amount_nanos: u64) -> ZingResult<PaymentProof> {
+        let counter = self.payment_counter.fetch_add(1, Ordering::Relaxed) + 1;
 
         // Generate a synthetic proof: SHA256(recipient || amount || counter)
         let mut hasher = Sha256::new();
         hasher.update(b"zing-payment-v1");
         hasher.update(&recipient.to_vec());
         hasher.update(&amount_nanos.to_le_bytes());
-        hasher.update(&self.payment_counter.to_le_bytes());
+        hasher.update(&counter.to_le_bytes());
         let digest: [u8; 32] = hasher.finalize().into();
 
         tracing::info!(
             recipient = %recipient,
             amount = amount_nanos,
-            counter = self.payment_counter,
+            counter = counter,
             proof = %hex::encode(digest),
             "WAL payment (MVP: synthetic proof — on-chain tx pending)"
         );
 
         Ok(digest)
-    }
-
-    /// Returns a clone of the underlying SuiReadClient.
-    pub fn read_client(&self) -> Arc<SuiReadClient> {
-        self.read_client.clone()
     }
 }
