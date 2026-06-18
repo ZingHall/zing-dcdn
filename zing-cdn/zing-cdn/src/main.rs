@@ -129,7 +129,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(peer_id = %keypair.public().to_peer_id(), "P2P keypair loaded");
 
     let keystore_path = cli.sui_keystore.as_ref().map(|s| resolve_cache_dir(s));
-    let wallet: Option<Arc<ZingWallet>> = match ZingWallet::from_keystore(keystore_path.as_deref()).await {
+    let wallet: Option<Arc<ZingWallet>> = match ZingWallet::from_keystore(keystore_path.as_deref(), None).await {
         Ok(w) => {
             tracing::info!(address = %w.address(), "Sui wallet loaded for WAL payments");
             Some(Arc::new(w))
@@ -160,6 +160,7 @@ async fn main() -> anyhow::Result<()> {
                     SettlementConfig {
                         package_id,
                         settlement_object_id,
+                        registry_object_id: settlement_object_id, // TODO: add --registry-object flag
                         vault_object_id,
                         wal_coin_type: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL".into(),
                         wal_package_id,

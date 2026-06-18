@@ -1,0 +1,16 @@
+app = "zing-cdn"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[[services]]
+  protocol = "udp"
+  internal_port = 34291
+
+  [[services.ports]]
+    port = 34291
+
+[mounts]
+  source = "zing_cdn_data"
+  destination = "/data"

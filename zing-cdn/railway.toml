@@ -1,0 +1,6 @@
+[build]
+dockerfilePath = "./Dockerfile"
+
+[service]
+port = 34291
+protocol = "udp"

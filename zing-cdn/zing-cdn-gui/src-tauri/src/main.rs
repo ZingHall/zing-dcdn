@@ -143,7 +143,7 @@ fn main() {
                 .ok()
                 .map(std::path::PathBuf::from);
             let wallet: Option<Arc<ZingWallet>> = {
-                match tauri::async_runtime::block_on(ZingWallet::from_keystore(keystore_path.as_deref())) {
+                match tauri::async_runtime::block_on(ZingWallet::from_keystore(keystore_path.as_deref(), None)) {
                     Ok(w) => {
                         tracing::info!(address = %w.address(), "Sui wallet loaded for WAL payments");
                         Some(Arc::new(w))

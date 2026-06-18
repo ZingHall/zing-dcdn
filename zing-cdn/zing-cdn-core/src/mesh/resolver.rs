@@ -78,6 +78,7 @@ impl Resolver {
         &self,
         peer_id: &PeerId,
         tx: &mpsc::Sender<P2pCommand>,
+        blob_hash: &[u8; 32],
         amount_nanos: u64,
     ) -> [u8; 32] {
         let wallet = match &self.wallet {
@@ -98,7 +99,7 @@ impl Resolver {
                         return [0u8; 32];
                     }
                 };
-                return wallet.pay_wal(recipient, amount_nanos).await.unwrap_or_else(|e| {
+                return wallet.pay_wal(recipient, blob_hash, amount_nanos).await.unwrap_or_else(|e| {
                     tracing::warn!(%e, "Payment proof generation failed");
                     [0u8; 32]
                 });
@@ -130,7 +131,7 @@ impl Resolver {
                         return [0u8; 32];
                     }
                 };
-                wallet.pay_wal(recipient, amount_nanos).await.unwrap_or_else(|e| {
+                wallet.pay_wal(recipient, blob_hash, amount_nanos).await.unwrap_or_else(|e| {
                     tracing::warn!(%e, "Payment proof generation failed");
                     [0u8; 32]
                 })
@@ -261,7 +262,7 @@ impl Resolver {
         if tx.send(P2pCommand::FetchBlob {
             peer_id: peer,
             blob_id: blob_id.0,
-            payment_tx_digest: self.resolve_payment(&peer, tx, READ_FEE_WAL_NANOS).await,
+            payment_tx_digest: self.resolve_payment(&peer, tx, &blob_id.0, READ_FEE_WAL_NANOS).await,
             reply: fetch_reply,
         }).await.is_err() {
             return None;
@@ -297,7 +298,7 @@ impl Resolver {
             if tx.send(P2pCommand::FetchBlob {
                 peer_id: *peer,
                 blob_id: blob_id.0,
-                payment_tx_digest: self.resolve_payment(peer, tx, READ_FEE_WAL_NANOS).await,
+                payment_tx_digest: self.resolve_payment(peer, tx, &blob_id.0, READ_FEE_WAL_NANOS).await,
                 reply: fetch_reply,
             }).await.is_err() {
                 continue;
@@ -339,7 +340,7 @@ impl Resolver {
                 blob_id: blob_id.0,
                 offset: 0,
                 length: RANGE_CHUNK,
-                payment_tx_digest: self.resolve_payment(peer, tx, RANGE_CHUNK * FEE_PER_BYTE_NANOS).await,
+                payment_tx_digest: self.resolve_payment(peer, tx, &blob_id.0, RANGE_CHUNK * FEE_PER_BYTE_NANOS).await,
                 reply: fetch_reply,
             }).await.is_err() {
                 continue;
@@ -371,7 +372,7 @@ impl Resolver {
                     blob_id: blob_id.0,
                     offset,
                     length: RANGE_CHUNK,
-                    payment_tx_digest: self.resolve_payment(peer, tx, RANGE_CHUNK * FEE_PER_BYTE_NANOS).await,
+                    payment_tx_digest: self.resolve_payment(peer, tx, &blob_id.0, RANGE_CHUNK * FEE_PER_BYTE_NANOS).await,
                     reply: next_reply,
                 }).await.is_err() {
                     break;
@@ -425,7 +426,7 @@ impl Resolver {
 
         let probers: Vec<&PeerId> = connected.iter().take(MAX_PARALLEL).collect();
         let probe_payments = futures::future::join_all(
-            probers.iter().map(|peer| self.resolve_payment(peer, tx, 8 * FEE_PER_BYTE_NANOS))
+            probers.iter().map(|peer| self.resolve_payment(peer, tx, &blob_id.0, 8 * FEE_PER_BYTE_NANOS))
         ).await;
 
         let mut probe_futs = Vec::new();
@@ -471,7 +472,7 @@ impl Resolver {
 
             let chunkers: Vec<&PeerId> = working.iter().collect();
             let chunk_payments = futures::future::join_all(
-                chunkers.iter().map(|peer| self.resolve_payment(peer, tx, CHUNK_SIZE * FEE_PER_BYTE_NANOS))
+                chunkers.iter().map(|peer| self.resolve_payment(peer, tx, &blob_id.0, CHUNK_SIZE * FEE_PER_BYTE_NANOS))
             ).await;
 
             let mut fetch_futs = Vec::new();

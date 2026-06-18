@@ -1,0 +1,15 @@
+target/
+**/target/
+zing-cdn-gui/target/
+zing-cdn-gui/src/
+zing-cdn-gui/index.html
+zing-cdn-gui/Dioxus.toml
+zing-cdn-gui/Cargo.toml
+zing-cdn-gui/Cargo.lock
+zing-cdn-gui/dev.sh
+*.app
+*.dmg
+.git
+.DS_Store
+*.swp
+*.swo
