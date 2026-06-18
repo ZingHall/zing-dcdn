@@ -108,3 +108,23 @@ pub async fn handle_inbound_sliver_request(
     }
     SliverResponse::not_found()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_spot_check_every_10th() {
+        let mut checks = Vec::new();
+        for i in 0..1000 {
+            if is_spot_check() {
+                checks.push(i + 1);
+            }
+        }
+        assert_eq!(checks.len(), 100, "must have exactly 100 checks in 1000 calls");
+
+        let intervals: Vec<usize> = checks.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(intervals.iter().all(|&d| d == 10),
+            "spot checks must be exactly 10 positions apart");
+    }
+}

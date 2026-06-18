@@ -69,3 +69,42 @@ impl ZingWallet {
         Ok(digest)
     }
 }
+
+#[cfg(test)]
+impl ZingWallet {
+    pub fn test_wallet() -> Self {
+        Self {
+            address: SuiAddress::random_for_testing_only(),
+            payment_counter: AtomicU64::new(0),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_pay_wal_returns_non_zero_proof() {
+        let wallet = ZingWallet::test_wallet();
+        let recipient = SuiAddress::random_for_testing_only();
+        let amount = 1_000_000u64;
+
+        let proof = wallet.pay_wal(recipient, amount).await.unwrap();
+
+        assert_ne!(proof, [0u8; 32], "payment proof must not be all zeros");
+        assert_eq!(proof.len(), 32, "payment proof must be 32 bytes");
+    }
+
+    #[tokio::test]
+    async fn test_pay_wal_counter_increments() {
+        let wallet = ZingWallet::test_wallet();
+        let recipient = SuiAddress::random_for_testing_only();
+        let amount = 100u64;
+
+        let proof1 = wallet.pay_wal(recipient, amount).await.unwrap();
+        let proof2 = wallet.pay_wal(recipient, amount).await.unwrap();
+
+        assert_ne!(proof1, proof2, "payment proofs for different counters must differ");
+    }
+}

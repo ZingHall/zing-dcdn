@@ -85,26 +85,26 @@ impl Resolver {
             None => return [0u8; 32],
         };
 
-        {
+        let cached = {
             let cache = self.sui_addr_cache.lock().await;
-            if let Some(cached) = cache.get(peer_id) {
-                return match cached {
-                    Some(addr) => {
-                        let recipient = match SuiAddress::from_bytes(*addr) {
-                            Ok(a) => a,
-                            Err(e) => {
-                                tracing::warn!(?addr, %e, "Invalid Sui address in cache");
-                                return [0u8; 32];
-                            }
-                        };
-                        wallet.pay_wal(recipient, amount_nanos).await.unwrap_or_else(|e| {
-                            tracing::warn!(%e, "Payment proof generation failed");
-                            [0u8; 32]
-                        })
+            cache.get(peer_id).copied()
+        };
+        match cached {
+            Some(Some(addr)) => {
+                let recipient = match SuiAddress::from_bytes(addr) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        tracing::warn!(?addr, %e, "Invalid Sui address in cache");
+                        return [0u8; 32];
                     }
-                    None => [0u8; 32],
                 };
+                return wallet.pay_wal(recipient, amount_nanos).await.unwrap_or_else(|e| {
+                    tracing::warn!(%e, "Payment proof generation failed");
+                    [0u8; 32]
+                });
             }
+            Some(None) => return [0u8; 32],
+            None => {}
         }
 
         let (reply, rx) = oneshot::channel();
@@ -423,20 +423,25 @@ impl Resolver {
             return None;
         }
 
+        let probers: Vec<&PeerId> = connected.iter().take(MAX_PARALLEL).collect();
+        let probe_payments = futures::future::join_all(
+            probers.iter().map(|peer| self.resolve_payment(peer, tx, 8 * FEE_PER_BYTE_NANOS))
+        ).await;
+
         let mut probe_futs = Vec::new();
-        for peer in connected.iter().take(MAX_PARALLEL) {
+        for (i, peer) in probers.iter().enumerate() {
             let (fetch_reply, fetch_rx) = tokio::sync::oneshot::channel();
             if tx.send(P2pCommand::FetchRange {
-                peer_id: *peer,
+                peer_id: **peer,
                 blob_id: blob_id.0,
                 offset: 0,
                 length: 8,
-                payment_tx_digest: self.resolve_payment(peer, tx, 8 * FEE_PER_BYTE_NANOS).await,
+                payment_tx_digest: probe_payments[i],
                 reply: fetch_reply,
             }).await.is_err() {
                 continue;
             }
-            probe_futs.push((*peer, tokio::time::timeout(PROBE_TIMEOUT, fetch_rx)));
+            probe_futs.push((**peer, tokio::time::timeout(PROBE_TIMEOUT, fetch_rx)));
         }
 
         let probe_results = futures::future::join_all(
@@ -463,17 +468,22 @@ impl Resolver {
 
         for window in 0u64.. {
             let base_offset = window * n as u64 * CHUNK_SIZE;
-            let mut fetch_futs = Vec::new();
 
-            for (i, peer) in working.iter().enumerate() {
+            let chunkers: Vec<&PeerId> = working.iter().collect();
+            let chunk_payments = futures::future::join_all(
+                chunkers.iter().map(|peer| self.resolve_payment(peer, tx, CHUNK_SIZE * FEE_PER_BYTE_NANOS))
+            ).await;
+
+            let mut fetch_futs = Vec::new();
+            for (i, peer) in chunkers.iter().enumerate() {
                 let offset = base_offset + i as u64 * CHUNK_SIZE;
                 let (fetch_reply, fetch_rx) = tokio::sync::oneshot::channel();
                 if tx.send(P2pCommand::FetchRange {
-                    peer_id: *peer,
+                    peer_id: **peer,
                     blob_id: blob_id.0,
                     offset,
                     length: CHUNK_SIZE,
-                    payment_tx_digest: self.resolve_payment(peer, tx, CHUNK_SIZE * FEE_PER_BYTE_NANOS).await,
+                    payment_tx_digest: chunk_payments[i],
                     reply: fetch_reply,
                 }).await.is_err() {
                     continue;
