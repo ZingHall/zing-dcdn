@@ -98,6 +98,7 @@ async fn test_mainnet_resolver() {
         walrus_client,
         verifier,
         Arc::new(RwLock::new(PeerReputationTable::new())),
+        None,
     );
 
     // First resolve: L3 miss → fetch from Walrus
