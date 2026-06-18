@@ -18,6 +18,7 @@ use zing_cdn_core::mesh::reputation::PeerReputationTable;
 use zing_cdn_core::mesh::resolver::Resolver;
 use zing_cdn_core::p2p::node::{P2pCommand, ZingP2pNode};
 use zing_cdn_core::sui::wallet::ZingWallet;
+use zing_cdn_core::sui::settlement::SettlementConfig;
 use zing_cdn_core::walrus::verify::BlobVerifier;
 
 const CACHE_BUDGET_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
@@ -56,6 +57,18 @@ struct Cli {
     /// (default: auto-discovers ~/.sui/sui_config/client.yaml)
     #[arg(long)]
     sui_keystore: Option<String>,
+
+    /// Sui package ID of the deployed zing_cdn settlement contract
+    #[arg(long)]
+    settlement_package: Option<String>,
+
+    /// Object ID of the shared Settlement object
+    #[arg(long)]
+    settlement_object: Option<String>,
+
+    /// Object ID of the peer's PeerVault (for routing payments)
+    #[arg(long)]
+    vault_object: Option<String>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -128,6 +141,36 @@ async fn main() -> anyhow::Result<()> {
     };
     let sui_address_bytes = wallet.as_ref().map(|w| w.address().to_inner());
 
+    let settlement_config: Option<SettlementConfig> = match (
+        &cli.settlement_package,
+        &cli.settlement_object,
+    ) {
+        (Some(pkg), Some(obj)) => {
+            let package_id = pkg.parse()
+                .map_err(|e| tracing::warn!(%e, "invalid settlement-package")).ok();
+            let settlement_object_id = obj.parse()
+                .map_err(|e| tracing::warn!(%e, "invalid settlement-object")).ok();
+            let vault_object_id = cli.vault_object.as_ref()
+                .and_then(|v| v.parse().ok());
+            let wal_package_id = "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59"
+                .parse()
+                .ok();
+            match (package_id, settlement_object_id, wal_package_id) {
+                (Some(package_id), Some(settlement_object_id), Some(wal_package_id)) => Some(
+                    SettlementConfig {
+                        package_id,
+                        settlement_object_id,
+                        vault_object_id,
+                        wal_coin_type: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL".into(),
+                        wal_package_id,
+                    }
+                ),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+
     let (p2p_node, command_rx) = ZingP2pNode::new(store_handle, keypair);
     let p2p_peer_id = p2p_node.local_peer_id();
     let p2p_command_tx = p2p_node.command_tx().clone();
@@ -170,10 +213,10 @@ async fn main() -> anyhow::Result<()> {
     if let Some(ref cmd) = cli.command {
         match cmd {
             Command::Get { ref blob_id } => {
-                cmd_get(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction, wallet.clone()).await
+                cmd_get(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction, wallet.clone(), settlement_config.clone()).await
             }
             Command::Cat { ref blob_id } => {
-                cmd_cat(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction, wallet.clone()).await
+                cmd_cat(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction, wallet.clone(), settlement_config.clone()).await
             }
             Command::Metadata { ref blob_id } => cmd_metadata(&cli, blob_id).await,
             Command::Status { ref blob_id } => cmd_status(&cli, blob_id).await,
@@ -288,6 +331,7 @@ async fn cmd_get(
     cache_pinning: &Arc<RwLock<PinningManager>>,
     cache_eviction: &Arc<RwLock<EvictionManager>>,
     wallet: Option<Arc<ZingWallet>>,
+    _settlement_config: Option<SettlementConfig>,
 ) -> anyhow::Result<()> {
     let blob_id = parse_blob_id(blob_id_str)?;
     let client = connect_mainnet().await?;
@@ -350,6 +394,7 @@ async fn cmd_cat(
     cache_pinning: &Arc<RwLock<PinningManager>>,
     cache_eviction: &Arc<RwLock<EvictionManager>>,
     wallet: Option<Arc<ZingWallet>>,
+    _settlement_config: Option<SettlementConfig>,
 ) -> anyhow::Result<()> {
     let blob_id = parse_blob_id(blob_id_str)?;
     let client = connect_mainnet().await?;
