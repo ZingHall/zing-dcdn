@@ -70,6 +70,10 @@ struct Cli {
     #[arg(long)]
     vault_object: Option<String>,
 
+    /// Object ID of the shared Registry (for auto-registration)
+    #[arg(long)]
+    registry_object: Option<String>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -129,29 +133,8 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(peer_id = %keypair.public().to_peer_id(), "P2P keypair loaded");
 
     let keystore_path = cli.sui_keystore.as_ref().map(|s| resolve_cache_dir(s));
-    let wallet: Option<Arc<ZingWallet>> = match ZingWallet::from_keystore(keystore_path.as_deref(), None).await {
-        Ok(w) => {
-            tracing::info!(address = %w.address(), "Sui wallet loaded for WAL payments");
-            Some(Arc::new(w))
-        }
-        Err(e) => {
-            tracing::warn!(%e, "Sui wallet not available — running without WAL payments");
-            None
-        }
-    };
-    let sui_address_bytes = wallet.as_ref().map(|w| w.address().to_inner());
 
-    let vault_object_id_bytes: Option<[u8; 32]> = cli.vault_object.as_ref()
-        .and_then(|v| {
-            let hex_str = v.strip_prefix("0x").unwrap_or(v);
-            if hex_str.len() != 64 { return None; }
-            let mut bytes = [0u8; 32];
-            for i in 0..32 {
-                bytes[i] = u8::from_str_radix(&hex_str[i*2..i*2+2], 16).ok()?;
-            }
-            Some(bytes)
-        });
-
+    // Build settlement config first (needed for wallet)
     let settlement_config: Option<SettlementConfig> = match (
         &cli.settlement_package,
         &cli.settlement_object,
@@ -163,6 +146,10 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| tracing::warn!(%e, "invalid settlement-object")).ok();
             let vault_object_id = cli.vault_object.as_ref()
                 .and_then(|v| v.parse().ok());
+            let registry_object_id = cli.registry_object.as_ref()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or_else(|| "0x97b5153b9e9897ad1630cdd06e5caa81ebbf8865e96003f38e50c5f1d6752527"
+                    .parse().expect("hardcoded registry_object_id"));
             let wal_package_id = "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59"
                 .parse()
                 .ok();
@@ -171,7 +158,7 @@ async fn main() -> anyhow::Result<()> {
                     SettlementConfig {
                         package_id,
                         settlement_object_id,
-                        registry_object_id: settlement_object_id, // TODO: add --registry-object flag
+                        registry_object_id,
                         vault_object_id,
                         wal_coin_type: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL".into(),
                         wal_package_id,
@@ -182,6 +169,39 @@ async fn main() -> anyhow::Result<()> {
         }
         _ => None,
     };
+
+    let wallet: Option<Arc<ZingWallet>> = match ZingWallet::from_keystore(keystore_path.as_deref(), settlement_config.clone()).await {
+        Ok(w) => {
+            tracing::info!(address = %w.address(), "Sui wallet loaded for WAL payments");
+            Some(Arc::new(w))
+        }
+        Err(e) => {
+            tracing::warn!(%e, "Sui wallet not available — running without WAL payments");
+            None
+        }
+    };
+    let sui_address_bytes = wallet.as_ref().map(|w| w.address().to_inner());
+
+    // Auto-register peer if wallet + settlement config are set
+    if let Some(ref wallet) = wallet {
+        if wallet.settlement_config().is_some() {
+            let pid_bytes = keypair.public().to_peer_id().to_bytes();
+            if let Err(e) = wallet.register_peer(pid_bytes).await {
+                tracing::warn!(%e, "Auto-registration failed — peer not registered on-chain");
+            }
+        }
+    }
+
+    let vault_object_id_bytes: Option<[u8; 32]> = cli.vault_object.as_ref()
+        .and_then(|v| {
+            let hex_str = v.strip_prefix("0x").unwrap_or(v);
+            if hex_str.len() != 64 { return None; }
+            let mut bytes = [0u8; 32];
+            for i in 0..32 {
+                bytes[i] = u8::from_str_radix(&hex_str[i*2..i*2+2], 16).ok()?;
+            }
+            Some(bytes)
+        });
 
     let (p2p_node, command_rx) = ZingP2pNode::new(store_handle, keypair);
     let p2p_peer_id = p2p_node.local_peer_id();

@@ -123,18 +123,18 @@ impl Resolver {
 
         self.sui_addr_cache.lock().await.insert(*peer_id, result);
 
-        // Also query vault ID in parallel (fire-and-forget, cache for next time)
+        // Also query vault ID in parallel (fire-and-forget, cached for next fetch)
         {
             let cache = self.vault_addr_cache.lock().await;
             if !cache.contains_key(peer_id) {
                 drop(cache);
                 let (vault_reply, vault_rx) = oneshot::channel();
                 let _ = tx.send(P2pCommand::GetPeerVault { peer_id: *peer_id, reply: vault_reply }).await;
-                // Don't await here — let it resolve in background, cache on next call
+                let cache_clone = self.vault_addr_cache.clone();
+                let peer_id_clone = *peer_id;
                 tokio::spawn(async move {
                     if let Ok(Ok(vault_result)) = tokio::time::timeout(Duration::from_secs(5), vault_rx).await {
-                        // cache handled on next resolve_payment call
-                        let _ = vault_result;
+                        cache_clone.lock().await.insert(peer_id_clone, vault_result);
                     }
                 });
             }
