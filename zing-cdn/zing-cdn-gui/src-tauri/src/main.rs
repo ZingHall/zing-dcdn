@@ -16,6 +16,7 @@ use zing_cdn_core::cache::store::BlobStore;
 use zing_cdn_core::cache::pinning::PinningManager;
 use zing_cdn_core::cache::eviction::EvictionManager;
 use zing_cdn_core::p2p::node::ZingP2pNode;
+use zing_cdn_core::sui::wallet::ZingWallet;
 use zing_cdn_core::client::ZingClient;
 
 use crate::api_http::HttpApiState;
@@ -138,6 +139,23 @@ fn main() {
             let p2p_key = p2p_node.key().clone();
             let peer_id = p2p_node.local_peer_id();
 
+            let keystore_path = std::env::var("ZING_SUI_KEYSTORE")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| dirs::home_dir().unwrap_or_default().join(".sui").join("sui_config"));
+            let wallet: Option<Arc<ZingWallet>> = {
+                match tauri::async_runtime::block_on(ZingWallet::from_keystore(&keystore_path)) {
+                    Ok(w) => {
+                        tracing::info!(address = %w.address(), "Sui wallet loaded for WAL payments");
+                        Some(Arc::new(w))
+                    }
+                    Err(e) => {
+                        tracing::warn!(path = %keystore_path.display(), %e, "Sui wallet not available — running without WAL payments");
+                        None
+                    }
+                }
+            };
+            let sui_address_bytes = wallet.as_ref().map(|w| w.address().to_inner());
+
             tracing::info!("PeerId: {peer_id}");
 
             let client = Arc::new(
@@ -174,6 +192,7 @@ fn main() {
                 cache_dir: cache_dir.clone(),
                 p2p_port,
                 client,
+                wallet: wallet.clone(),
             };
 
             // Build axum router with CORS (localhost app — permissive)
@@ -207,7 +226,7 @@ fn main() {
             // Spawn P2P background task with loaded bootstrap peers
             tauri::async_runtime::spawn(async move {
                 let _ = ZingP2pNode::run(
-                    p2p_key, command_rx, store, listen_addr, bootstrap_addrs, external_addrs, None,
+                    p2p_key, command_rx, store, listen_addr, bootstrap_addrs, external_addrs, sui_address_bytes,
                 ).await;
             });
 

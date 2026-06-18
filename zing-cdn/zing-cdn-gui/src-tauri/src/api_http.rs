@@ -10,6 +10,7 @@ use zing_cdn_core::cache::store::BlobStore;
 use zing_cdn_core::cache::pinning::PinningManager;
 use zing_cdn_core::cache::eviction::EvictionManager;
 use zing_cdn_core::p2p::P2pCommand;
+use zing_cdn_core::sui::wallet::ZingWallet;
 use zing_cdn_core::client::ZingClient;
 
 #[derive(Clone)]
@@ -24,6 +25,7 @@ pub struct HttpApiState {
     pub cache_dir: std::path::PathBuf,
     pub p2p_port: u16,
     pub client: Arc<ZingClient>,
+    pub wallet: Option<Arc<ZingWallet>>,
 }
 
 const CACHE_BUDGET: u64 = 500 * 1024 * 1024;
@@ -131,6 +133,9 @@ pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInf
         Some(state.peer_id),
     );
     resolver.set_p2p_channel(state.p2p_tx.clone());
+    if let Some(wallet) = &state.wallet {
+        resolver.set_wallet(wallet.clone());
+    }
 
     let result = resolver.resolve(&id).await.map_err(|e| e.to_string())?;
     let data = &result.data;
@@ -250,6 +255,9 @@ pub async fn resolve_blob_with_progress(
         Some(state.peer_id),
     );
     resolver.set_p2p_channel(state.p2p_tx.clone());
+    if let Some(wallet) = &state.wallet {
+        resolver.set_wallet(wallet.clone());
+    }
 
     match resolver.resolve(&id).await {
         Ok(result) => {

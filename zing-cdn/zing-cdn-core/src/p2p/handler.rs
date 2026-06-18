@@ -6,10 +6,17 @@ use crate::p2p::protocol::RangeResponse;
 use crate::p2p::protocol::SliverRequest;
 use crate::p2p::protocol::SliverResponse;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::RwLock;
 use walrus_core::BlobId;
 
 pub type BlobStoreHandle = Arc<RwLock<BlobStore>>;
+
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn is_spot_check() -> bool {
+    REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed) % 10 == 0
+}
 
 pub async fn handle_inbound_request(
     store: &BlobStoreHandle,
@@ -18,6 +25,10 @@ pub async fn handle_inbound_request(
     let blob_id_str = BlobId(request.blob_id).to_string();
     if request.payment_tx_digest == [0u8; 32] {
         tracing::debug!(blob_id = %blob_id_str, "handling inbound blob request (no payment)");
+        if is_spot_check() {
+            tracing::warn!(blob_id = %blob_id_str, "Spot-check: refusing unpaid blob request");
+            return BlobResponse::not_found();
+        }
     } else {
         tracing::debug!(blob_id = %blob_id_str, tx_digest = %hex::encode(request.payment_tx_digest), "handling inbound blob request (paid)");
     }
@@ -46,6 +57,10 @@ pub async fn handle_inbound_range_request(
     let blob_id_str = BlobId(request.blob_id).to_string();
     if request.payment_tx_digest == [0u8; 32] {
         tracing::debug!(blob_id = %blob_id_str, "handling inbound range request (no payment)");
+        if is_spot_check() {
+            tracing::warn!(blob_id = %blob_id_str, "Spot-check: refusing unpaid range request");
+            return RangeResponse::not_found();
+        }
     } else {
         tracing::debug!(blob_id = %blob_id_str, tx_digest = %hex::encode(request.payment_tx_digest), "handling inbound range request (paid)");
     }

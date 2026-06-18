@@ -17,6 +17,7 @@ use zing_cdn_core::client::ZingClient;
 use zing_cdn_core::mesh::reputation::PeerReputationTable;
 use zing_cdn_core::mesh::resolver::Resolver;
 use zing_cdn_core::p2p::node::{P2pCommand, ZingP2pNode};
+use zing_cdn_core::sui::wallet::ZingWallet;
 use zing_cdn_core::walrus::verify::BlobVerifier;
 
 const CACHE_BUDGET_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
@@ -50,6 +51,11 @@ struct Cli {
     /// Keep P2P node alive after command completes
     #[arg(long)]
     serve: bool,
+
+    /// Path to Sui CLI keystore directory for WAL token payments
+    /// (default: ~/.sui/sui_config/)
+    #[arg(long, default_value = "~/.sui/sui_config/")]
+    sui_keystore: String,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -108,6 +114,20 @@ async fn main() -> anyhow::Result<()> {
     let store_handle = cache_store.clone();
     let keypair = load_or_generate_keypair(&cache_dir);
     tracing::info!(peer_id = %keypair.public().to_peer_id(), "P2P keypair loaded");
+
+    let keystore_path = resolve_cache_dir(&cli.sui_keystore);
+    let wallet: Option<Arc<ZingWallet>> = match ZingWallet::from_keystore(&keystore_path).await {
+        Ok(w) => {
+            tracing::info!(address = %w.address(), "Sui wallet loaded for WAL payments");
+            Some(Arc::new(w))
+        }
+        Err(e) => {
+            tracing::warn!(path = %keystore_path.display(), %e, "Sui wallet not available — running without WAL payments");
+            None
+        }
+    };
+    let sui_address_bytes = wallet.as_ref().map(|w| w.address().to_inner());
+
     let (p2p_node, command_rx) = ZingP2pNode::new(store_handle, keypair);
     let p2p_peer_id = p2p_node.local_peer_id();
     let p2p_command_tx = p2p_node.command_tx().clone();
@@ -133,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
             p2p_listen,
             bootstrap_peers,
             p2p_external_addrs,
-            None,
+            sui_address_bytes,
         )
         .await
         {
@@ -150,10 +170,10 @@ async fn main() -> anyhow::Result<()> {
     if let Some(ref cmd) = cli.command {
         match cmd {
             Command::Get { ref blob_id } => {
-                cmd_get(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction).await
+                cmd_get(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction, wallet.clone()).await
             }
             Command::Cat { ref blob_id } => {
-                cmd_cat(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction).await
+                cmd_cat(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction, wallet.clone()).await
             }
             Command::Metadata { ref blob_id } => cmd_metadata(&cli, blob_id).await,
             Command::Status { ref blob_id } => cmd_status(&cli, blob_id).await,
@@ -267,6 +287,7 @@ async fn cmd_get(
     cache_store: &Arc<RwLock<BlobStore>>,
     cache_pinning: &Arc<RwLock<PinningManager>>,
     cache_eviction: &Arc<RwLock<EvictionManager>>,
+    wallet: Option<Arc<ZingWallet>>,
 ) -> anyhow::Result<()> {
     let blob_id = parse_blob_id(blob_id_str)?;
     let client = connect_mainnet().await?;
@@ -283,6 +304,9 @@ async fn cmd_get(
     );
     if let Some(tx) = p2p_tx {
         resolver.set_p2p_channel(tx.clone());
+    }
+    if let Some(wallet) = wallet {
+        resolver.set_wallet(wallet);
     }
 
     let result = resolver.resolve(&blob_id).await?;
@@ -325,6 +349,7 @@ async fn cmd_cat(
     cache_store: &Arc<RwLock<BlobStore>>,
     cache_pinning: &Arc<RwLock<PinningManager>>,
     cache_eviction: &Arc<RwLock<EvictionManager>>,
+    wallet: Option<Arc<ZingWallet>>,
 ) -> anyhow::Result<()> {
     let blob_id = parse_blob_id(blob_id_str)?;
     let client = connect_mainnet().await?;
@@ -340,6 +365,9 @@ async fn cmd_cat(
     );
     if let Some(tx) = p2p_tx {
         resolver.set_p2p_channel(tx.clone());
+    }
+    if let Some(wallet) = wallet {
+        resolver.set_wallet(wallet);
     }
 
     let result = resolver.resolve(&blob_id).await?;
