@@ -162,6 +162,7 @@ impl ZingP2pNode {
         let mut peer_addresses: HashMap<PeerId, Vec<Multiaddr>> = HashMap::new();
         let mut bootstrap_peers: std::collections::HashSet<PeerId> = bootstrap_addrs.iter().map(|(pid, _)| *pid).collect();
         let mut bootstrap_done = false;
+        let mut sui_addr_published = false;
         let mut pending_announces: Vec<[u8; 32]> = Vec::new();
         let mut announce_retried: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
         let mut pending_sui_addr_queries: HashMap<kad::QueryId, oneshot::Sender<Option<[u8; 32]>>> = HashMap::new();
@@ -200,16 +201,15 @@ impl ZingP2pNode {
                             &mut announce_retried,
                             &mut pending_sui_addr_queries,
                             sui_addr_to_publish,
+                            &mut sui_addr_published,
                             &store,
                         ).await,
                         None => break,
                     }
                 }
                 _ = republish_sui_interval.tick() => {
-                    if bootstrap_done {
-                        if let Some(sui_addr) = sui_addr_to_publish {
-                            publish_sui_addr_record(&mut swarm, sui_addr);
-                        }
+                    if let Some(sui_addr) = sui_addr_to_publish {
+                        publish_sui_addr_record(&mut swarm, sui_addr);
                     }
                 }
             }
@@ -395,6 +395,7 @@ impl ZingP2pNode {
         announce_retried: &mut std::collections::HashSet<[u8; 32]>,
         pending_sui_addr_queries: &mut HashMap<kad::QueryId, oneshot::Sender<Option<[u8; 32]>>>,
         sui_addr_to_publish: Option<[u8; 32]>,
+        sui_addr_published: &mut bool,
         store: &BlobStoreHandle,
     ) {
         match event {
@@ -429,15 +430,21 @@ impl ZingP2pNode {
                 };
                 swarm.behaviour_mut().kad.add_address(&peer_id, peer_addr.clone());
                 tracing::debug!(%peer_id, addr = %peer_addr, "Kad routing table: added peer address");
+
+                // Publish Sui address on first connection so peers can query it
+                if !*sui_addr_published {
+                    if let Some(sui_addr) = sui_addr_to_publish {
+                        publish_sui_addr_record(swarm, sui_addr);
+                        *sui_addr_published = true;
+                    }
+                }
+
                 if bootstrap_peers.contains(&peer_id) {
                     if !*bootstrap_done {
                         match swarm.behaviour_mut().kad.bootstrap() {
                             Ok(_) => {
                                 tracing::info!("kad bootstrap initiated after connection to bootstrap peer {}", peer_id);
                                 *bootstrap_done = true;
-                                if let Some(sui_addr) = sui_addr_to_publish {
-                                    publish_sui_addr_record(swarm, sui_addr);
-                                }
                             }
                             Err(e) => {
                                 tracing::warn!(error = %e, "kad bootstrap failed after connection to bootstrap peer {}", peer_id);
