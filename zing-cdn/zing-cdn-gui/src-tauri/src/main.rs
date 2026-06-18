@@ -116,6 +116,16 @@ fn main() {
                 .parse()
                 .expect("valid listen addr");
 
+            let external_addrs: Vec<Multiaddr> = std::env::var("ZING_EXTERNAL_ADDR")
+                .map(|s| {
+                    s.split(',')
+                        .map(|a| a.trim().to_string())
+                        .filter(|a| !a.is_empty())
+                        .map(|a| a.parse().expect("valid ZING_EXTERNAL_ADDR"))
+                        .collect()
+                })
+                .unwrap_or_default();
+
             tracing::info!("P2P port: {p2p_port}, API port: {api_port}, cache: {}", cache_dir.display());
 
             let store = Arc::new(RwLock::new(
@@ -197,7 +207,7 @@ fn main() {
             // Spawn P2P background task with loaded bootstrap peers
             tauri::async_runtime::spawn(async move {
                 let _ = ZingP2pNode::run(
-                    p2p_key, command_rx, store, listen_addr, bootstrap_addrs, vec![],
+                    p2p_key, command_rx, store, listen_addr, bootstrap_addrs, external_addrs,
                 ).await;
             });
 
