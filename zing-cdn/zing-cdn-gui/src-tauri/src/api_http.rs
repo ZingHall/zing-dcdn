@@ -128,6 +128,7 @@ pub async fn resolve_blob(state: &HttpApiState, blob_id: &str) -> Result<BlobInf
         state.client.walrus_client_arc(),
         verifier,
         Arc::new(RwLock::new(PeerReputationTable::new())),
+        Some(state.peer_id),
     );
     resolver.set_p2p_channel(state.p2p_tx.clone());
 
@@ -230,6 +231,8 @@ pub async fn resolve_blob_with_progress(
                 "cached": info.cached, "content": info.content, "mime_type": info.mime_type,
                 "data_base64": info.data_base64
             }}));
+            // Blob found in cache — announce to DHT so other peers can discover it
+            let _ = state.p2p_tx.send(P2pCommand::AnnounceBlob { blob_id: id.0 }).await;
             return;
         }
     }
@@ -244,6 +247,7 @@ pub async fn resolve_blob_with_progress(
         state.client.walrus_client_arc(),
         verifier,
         Arc::new(RwLock::new(PeerReputationTable::new())),
+        Some(state.peer_id),
     );
     resolver.set_p2p_channel(state.p2p_tx.clone());
 
@@ -265,7 +269,7 @@ pub async fn resolve_blob_with_progress(
         }
         Err(e) => send_err(&e.to_string()),
     }
-}
+} // tx dropped here — stream ends, connection closes
 
 #[derive(Serialize)]
 pub struct PeersInfo {
