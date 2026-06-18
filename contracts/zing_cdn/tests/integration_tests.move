@@ -95,11 +95,14 @@ fun test_full_flow() {
         peer_vault::delegate_for_testing(&mut vault, del_coin, s.ctx());
         assert!(peer_vault::total_shares(&vault) == del_amount, 6);
         assert!(peer_vault::total_reserves(&vault) == del_amount, 7);
+        test_scenario::return_shared(vault);
+    };
 
+    test_scenario::next_tx(&mut s, DELEGATOR);
+    {
         let cert = test_scenario::take_from_sender<peer_vault::ShareCertificate>(&s);
         assert!(peer_vault::cert_shares(&cert) == del_amount, 8);
         test_scenario::return_to_sender(&s, cert);
-        test_scenario::return_shared(vault);
     };
 
     // --- Step 4: Client pays 2 WAL via settlement ---
@@ -123,11 +126,14 @@ fun test_full_flow() {
     {
         let mut vault = test_scenario::take_shared<peer_vault::PeerVault>(&s);
         peer_vault::claim_earnings_for_testing(&mut vault, s.ctx());
+        test_scenario::return_shared(vault);
+    };
 
+    test_scenario::next_tx(&mut s, PEER);
+    {
         let claimed = test_scenario::take_from_sender<Coin<wal::wal::WAL>>(&s);
         assert!(coin::value(&claimed) == 200_000_000u64, 11);
         test_scenario::return_to_sender(&s, claimed);
-        test_scenario::return_shared(vault);
     };
 
     // --- Step 6: Delegator undelegates with yield ---
@@ -136,12 +142,15 @@ fun test_full_flow() {
         let cert = test_scenario::take_from_sender<peer_vault::ShareCertificate>(&s);
         let mut vault = test_scenario::take_shared<peer_vault::PeerVault>(&s);
         peer_vault::undelegate_for_testing(&mut vault, cert, s.ctx());
+        test_scenario::return_shared(vault);
+    };
 
+    test_scenario::next_tx(&mut s, DELEGATOR);
+    {
         let withdrawn = test_scenario::take_from_sender<Coin<wal::wal::WAL>>(&s);
         assert!(coin::value(&withdrawn) > del_amount, 12);
         assert!(coin::value(&withdrawn) == del_amount + pay_amount - 200_000_000u64, 13);
         test_scenario::return_to_sender(&s, withdrawn);
-        test_scenario::return_shared(vault);
     };
 
     test_scenario::end(s);
