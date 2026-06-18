@@ -2,8 +2,8 @@ use std::io;
 use async_trait::async_trait;
 use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-pub const ZING_CDN_BLOB_PROTOCOL: &str = "/zing-cdn/data/2.0";
-pub const ZING_CDN_RANGE_PROTOCOL: &str = "/zing-cdn/range/1.0";
+pub const ZING_CDN_BLOB_PROTOCOL: &str = "/zing-cdn/data/3.0";
+pub const ZING_CDN_RANGE_PROTOCOL: &str = "/zing-cdn/range/2.0";
 pub const ZING_CDN_SLIVER_PROTOCOL: &str = "/zing-cdn/sliver/1.0";
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
 
@@ -11,6 +11,7 @@ pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
 pub struct BlobRequest {
     pub blob_id: [u8; 32],
     pub version: u8,
+    pub payment_tx_digest: [u8; 32],
 }
 
 #[derive(Debug, Clone)]
@@ -47,14 +48,16 @@ impl libp2p::request_response::Codec for BinaryProtocolCodec {
         T: AsyncRead + Unpin + Send,
     {
         let len = read_u32_le(io).await? as usize;
-        if len > MAX_MESSAGE_SIZE || len < 33 {
+        if len > MAX_MESSAGE_SIZE || len < 65 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("invalid request length: {len}")));
         }
         let mut buf = vec![0u8; len];
         io.read_exact(&mut buf).await?;
         let mut blob_id = [0u8; 32];
         blob_id.copy_from_slice(&buf[..32]);
-        Ok(BlobRequest { blob_id, version: buf[32] })
+        let mut payment_tx_digest = [0u8; 32];
+        payment_tx_digest.copy_from_slice(&buf[33..65]);
+        Ok(BlobRequest { blob_id, version: buf[32], payment_tx_digest })
     }
 
     async fn read_response<T>(&mut self, _protocol: &Self::Protocol, io: &mut T) -> io::Result<Self::Response>
@@ -88,11 +91,12 @@ impl libp2p::request_response::Codec for BinaryProtocolCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        // 33 bytes: 32 blob_id + 1 version
-        write_u32_le(io, 33).await?;
-        let mut buf = [0u8; 33];
+        // 65 bytes: 32 blob_id + 1 version + 32 payment_tx_digest
+        write_u32_le(io, 65).await?;
+        let mut buf = [0u8; 65];
         buf[..32].copy_from_slice(&req.blob_id);
         buf[32] = req.version;
+        buf[33..65].copy_from_slice(&req.payment_tx_digest);
         io.write_all(&buf).await?;
         Ok(())
     }
@@ -133,6 +137,7 @@ pub struct RangeRequest {
     pub blob_id: [u8; 32],
     pub offset: u64,
     pub length: u64,
+    pub payment_tx_digest: [u8; 32],
 }
 
 #[derive(Debug, Clone)]
@@ -164,16 +169,18 @@ impl libp2p::request_response::Codec for RangeProtocolCodec {
         T: AsyncRead + Unpin + Send,
     {
         let len = read_u32_le(io).await? as usize;
-        if len != 48 {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("invalid range request length: {len} (expected 48)")));
+        if len != 80 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("invalid range request length: {len} (expected 80)")));
         }
-        let mut buf = [0u8; 48];
+        let mut buf = [0u8; 80];
         io.read_exact(&mut buf).await?;
         let mut blob_id = [0u8; 32];
         blob_id.copy_from_slice(&buf[..32]);
         let offset = u64::from_le_bytes([buf[32], buf[33], buf[34], buf[35], buf[36], buf[37], buf[38], buf[39]]);
         let length = u64::from_le_bytes([buf[40], buf[41], buf[42], buf[43], buf[44], buf[45], buf[46], buf[47]]);
-        Ok(RangeRequest { blob_id, offset, length })
+        let mut payment_tx_digest = [0u8; 32];
+        payment_tx_digest.copy_from_slice(&buf[48..80]);
+        Ok(RangeRequest { blob_id, offset, length, payment_tx_digest })
     }
 
     async fn read_response<T>(&mut self, _protocol: &Self::Protocol, io: &mut T) -> io::Result<Self::Response>
@@ -200,11 +207,12 @@ impl libp2p::request_response::Codec for RangeProtocolCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        write_u32_le(io, 48).await?;
-        let mut buf = [0u8; 48];
+        write_u32_le(io, 80).await?;
+        let mut buf = [0u8; 80];
         buf[..32].copy_from_slice(&req.blob_id);
         buf[32..40].copy_from_slice(&req.offset.to_le_bytes());
         buf[40..48].copy_from_slice(&req.length.to_le_bytes());
+        buf[48..80].copy_from_slice(&req.payment_tx_digest);
         io.write_all(&buf).await?;
         Ok(())
     }

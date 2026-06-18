@@ -133,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
             p2p_listen,
             bootstrap_peers,
             p2p_external_addrs,
+            None,
         )
         .await
         {

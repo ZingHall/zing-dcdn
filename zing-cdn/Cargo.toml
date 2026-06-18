@@ -13,11 +13,13 @@ walrus-core = { git = "https://github.com/MystenLabs/walrus.git", rev = "73eb7eb
 walrus-sdk = { git = "https://github.com/MystenLabs/walrus.git", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-sdk" }
 walrus-storage-node-client = { git = "https://github.com/MystenLabs/walrus.git", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-storage-node-client" }
 walrus-sui = { git = "https://github.com/MystenLabs/walrus.git", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-sui" }
+walrus-utils = { git = "https://github.com/MystenLabs/walrus.git", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-utils" }
 
 # Sui (matching Walrus's versions — these come transitively through Walrus)
 # We only need the thin SDK types for our direct use
 sui-sdk-types = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = "5b41bc701525f1b94f1fe63008d4841bc6fb1065", features = ["hash", "serde"] }
 sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = "5b41bc701525f1b94f1fe63008d4841bc6fb1065" }
+sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.73.0" }
 
 # P2P
 libp2p = { version = "0.54", features = ["tokio", "quic", "kad", "gossipsub", "noise", "tcp", "yamux", "macros", "request-response", "identify", "ping"] }

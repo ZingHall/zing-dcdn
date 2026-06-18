@@ -35,14 +35,14 @@ impl ZingBehaviour {
         let data_cfg = request_response::Config::default()
             .with_request_timeout(Duration::from_secs(30));
         let data = request_response::Behaviour::new(
-            vec![("/zing-cdn/data/2.0", request_response::ProtocolSupport::Full)],
+            vec![("/zing-cdn/data/3.0", request_response::ProtocolSupport::Full)],
             data_cfg,
         );
 
         let range_cfg = request_response::Config::default()
             .with_request_timeout(Duration::from_secs(30));
         let range = request_response::Behaviour::new(
-            vec![("/zing-cdn/range/1.0", request_response::ProtocolSupport::Full)],
+            vec![("/zing-cdn/range/2.0", request_response::ProtocolSupport::Full)],
             range_cfg,
         );
 

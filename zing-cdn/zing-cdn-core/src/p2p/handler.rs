@@ -16,7 +16,11 @@ pub async fn handle_inbound_request(
     request: BlobRequest,
 ) -> BlobResponse {
     let blob_id_str = BlobId(request.blob_id).to_string();
-    tracing::info!(blob_id = %blob_id_str, "handling inbound blob request");
+    if request.payment_tx_digest == [0u8; 32] {
+        tracing::info!(blob_id = %blob_id_str, "handling inbound blob request (no payment)");
+    } else {
+        tracing::info!(blob_id = %blob_id_str, tx_digest = %hex::encode(request.payment_tx_digest), "handling inbound blob request (paid)");
+    }
 
     let store = store.read().await;
     match store.get(&blob_id_str) {

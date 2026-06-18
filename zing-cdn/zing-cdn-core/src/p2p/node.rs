@@ -27,6 +27,7 @@ pub enum P2pCommand {
     FetchBlob {
         peer_id: PeerId,
         blob_id: [u8; 32],
+        payment_tx_digest: [u8; 32],
         reply: oneshot::Sender<ZingResult<Vec<u8>>>,
     },
     FetchRange {
@@ -34,6 +35,7 @@ pub enum P2pCommand {
         blob_id: [u8; 32],
         offset: u64,
         length: u64,
+        payment_tx_digest: [u8; 32],
         reply: oneshot::Sender<ZingResult<Vec<u8>>>,
     },
     FetchSliver {
@@ -59,6 +61,10 @@ pub enum P2pCommand {
     QueryPeerAddress {
         target: PeerId,
         reply: oneshot::Sender<Vec<Multiaddr>>,
+    },
+    GetPeerSuiAddress {
+        peer_id: PeerId,
+        reply: oneshot::Sender<Option<[u8; 32]>>,
     },
 }
 
@@ -94,6 +100,7 @@ impl ZingP2pNode {
         listen_addr: Multiaddr,
         bootstrap_addrs: Vec<(PeerId, Multiaddr)>,
         external_addrs: Vec<Multiaddr>,
+        sui_address: Option<[u8; 32]>,
     ) -> ZingResult<()> {
 
         let store_for_builder = store.clone();
@@ -118,6 +125,17 @@ impl ZingP2pNode {
         for addr in &external_addrs {
             swarm.add_external_address(addr.clone());
             tracing::info!(%addr, "Registered external address for Kad provider records");
+        }
+
+        if let Some(sui_addr) = sui_address {
+            let peer_id = *swarm.local_peer_id();
+            let mut key = b"zing-sui-addr".to_vec();
+            key.extend_from_slice(&peer_id.to_bytes());
+            let record = kad::Record::new(kad::RecordKey::new(&key), sui_addr.to_vec());
+            match swarm.behaviour_mut().kad.put_record(record, libp2p::kad::Quorum::One) {
+                Ok(_) => tracing::info!("Published Sui address to Kad DHT"),
+                Err(e) => tracing::warn!(error = %e, "Failed to publish Sui address"),
+            }
         }
 
         for (peer_id, addr) in &bootstrap_addrs {
@@ -155,6 +173,7 @@ impl ZingP2pNode {
         let mut bootstrap_done = false;
         let mut pending_announces: Vec<[u8; 32]> = Vec::new();
         let mut announce_retried: std::collections::HashSet<[u8; 32]> = std::collections::HashSet::new();
+        let mut pending_sui_addr_queries: HashMap<kad::QueryId, oneshot::Sender<Option<[u8; 32]>>> = HashMap::new();
 
         loop {
             tokio::select! {
@@ -169,6 +188,7 @@ impl ZingP2pNode {
                         &mut pending_addr_queries,
                         &mut peer_addresses,
                         &mut pending_announces,
+                        &mut pending_sui_addr_queries,
                     );
                 }
                 event = swarm.next() => {
@@ -186,6 +206,7 @@ impl ZingP2pNode {
                             &mut bootstrap_done,
                             &mut pending_announces,
                             &mut announce_retried,
+                            &mut pending_sui_addr_queries,
                             &store,
                         ).await,
                         None => break,
@@ -207,6 +228,7 @@ impl ZingP2pNode {
         pending_addr_queries: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<Vec<Multiaddr>>>,
         peer_addresses: &HashMap<PeerId, Vec<Multiaddr>>,
         pending_announces: &mut Vec<[u8; 32]>,
+        pending_sui_addr_queries: &mut HashMap<kad::QueryId, oneshot::Sender<Option<[u8; 32]>>>,
     ) {
         match cmd {
             P2pCommand::AnnounceBlob { blob_id } => {
@@ -230,11 +252,13 @@ impl ZingP2pNode {
             P2pCommand::FetchBlob {
                 peer_id,
                 blob_id,
+                payment_tx_digest,
                 reply,
             } => {
                 let request = BlobRequest {
                     blob_id,
                     version: 0,
+                    payment_tx_digest,
                 };
                 let request_id = swarm
                     .behaviour_mut()
@@ -247,12 +271,14 @@ impl ZingP2pNode {
                 blob_id,
                 offset,
                 length,
+                payment_tx_digest,
                 reply,
             } => {
                 let request = RangeRequest {
                     blob_id,
                     offset,
                     length,
+                    payment_tx_digest,
                 };
                 let request_id = swarm
                     .behaviour_mut()
@@ -344,6 +370,13 @@ impl ZingP2pNode {
                     tracing::warn!(%peer_id, "disconnect failed");
                 }
             }
+            P2pCommand::GetPeerSuiAddress { peer_id, reply } => {
+                let mut key = b"zing-sui-addr".to_vec();
+                key.extend_from_slice(&peer_id.to_bytes());
+                let record_key = kad::RecordKey::new(&key);
+                let query_id = swarm.behaviour_mut().kad.get_record(record_key);
+                pending_sui_addr_queries.insert(query_id, reply);
+            }
         }
     }
 
@@ -360,6 +393,7 @@ impl ZingP2pNode {
         bootstrap_done: &mut bool,
         pending_announces: &mut Vec<[u8; 32]>,
         announce_retried: &mut std::collections::HashSet<[u8; 32]>,
+        pending_sui_addr_queries: &mut HashMap<kad::QueryId, oneshot::Sender<Option<[u8; 32]>>>,
         store: &BlobStoreHandle,
     ) {
         match event {
@@ -374,6 +408,7 @@ impl ZingP2pNode {
                     pending_addr_queries,
                     peer_addresses,
                     announce_retried,
+                    pending_sui_addr_queries,
                     store,
                 )
                 .await;
@@ -459,6 +494,7 @@ impl ZingP2pNode {
         pending_addr_queries: &mut HashMap<request_response::OutboundRequestId, oneshot::Sender<Vec<Multiaddr>>>,
         peer_addresses: &mut HashMap<PeerId, Vec<Multiaddr>>,
         announce_retried: &mut std::collections::HashSet<[u8; 32]>,
+        pending_sui_addr_queries: &mut HashMap<kad::QueryId, oneshot::Sender<Option<[u8; 32]>>>,
         store: &BlobStoreHandle,
     ) {
         match event {
@@ -516,6 +552,26 @@ impl ZingP2pNode {
                             }
                             kad::QueryResult::Bootstrap(Err(e)) => {
                                 tracing::warn!(?id, %e, "Kad bootstrap query failed");
+                            }
+                            kad::QueryResult::GetRecord(Ok(ok)) => {
+                                if let Some(sender) = pending_sui_addr_queries.remove(&id) {
+                                    let sui_addr = match ok {
+                                        kad::GetRecordOk::FoundRecord(peer_record) => {
+                                            let mut addr = [0u8; 32];
+                                            let len = peer_record.record.value.len().min(32);
+                                            addr[..len].copy_from_slice(&peer_record.record.value[..len]);
+                                            Some(addr)
+                                        }
+                                        kad::GetRecordOk::FinishedWithNoAdditionalRecord { .. } => None,
+                                    };
+                                    let _ = sender.send(sui_addr);
+                                }
+                            }
+                            kad::QueryResult::GetRecord(Err(e)) => {
+                                tracing::warn!(?id, %e, "Kad get_record query failed");
+                                if let Some(sender) = pending_sui_addr_queries.remove(&id) {
+                                    let _ = sender.send(None);
+                                }
                             }
                             _ => {
                                 tracing::debug!(?id, result = ?result, "Kad query progressed (unhandled)");

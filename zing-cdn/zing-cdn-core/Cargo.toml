@@ -9,6 +9,8 @@ walrus-sdk = { workspace = true }
 walrus-core = { workspace = true }
 walrus-storage-node-client = { workspace = true }
 walrus-sui = { workspace = true }
+walrus-utils = { workspace = true }
+sui-sdk = { workspace = true }
 
 # P2P
 libp2p = { workspace = true }

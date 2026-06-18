@@ -181,6 +181,7 @@ impl Resolver {
         if tx.send(P2pCommand::FetchBlob {
             peer_id: peer,
             blob_id: blob_id.0,
+            payment_tx_digest: [0u8; 32],
             reply: fetch_reply,
         }).await.is_err() {
             return None;
@@ -216,6 +217,7 @@ impl Resolver {
             if tx.send(P2pCommand::FetchBlob {
                 peer_id: *peer,
                 blob_id: blob_id.0,
+                payment_tx_digest: [0u8; 32],
                 reply: fetch_reply,
             }).await.is_err() {
                 continue;
@@ -257,6 +259,7 @@ impl Resolver {
                 blob_id: blob_id.0,
                 offset: 0,
                 length: RANGE_CHUNK,
+                payment_tx_digest: [0u8; 32],
                 reply: fetch_reply,
             }).await.is_err() {
                 continue;
@@ -288,6 +291,7 @@ impl Resolver {
                     blob_id: blob_id.0,
                     offset,
                     length: RANGE_CHUNK,
+                    payment_tx_digest: [0u8; 32],
                     reply: next_reply,
                 }).await.is_err() {
                     break;
@@ -347,6 +351,7 @@ impl Resolver {
                 blob_id: blob_id.0,
                 offset: 0,
                 length: 8,
+                payment_tx_digest: [0u8; 32],
                 reply: fetch_reply,
             }).await.is_err() {
                 continue;
@@ -388,6 +393,7 @@ impl Resolver {
                     blob_id: blob_id.0,
                     offset,
                     length: CHUNK_SIZE,
+                    payment_tx_digest: [0u8; 32],
                     reply: fetch_reply,
                 }).await.is_err() {
                     continue;

@@ -37,7 +37,7 @@ async fn test_kad_start_providing_and_get_providers() {
 
     let store_a_clone = store_a.clone();
     let join_a = tokio::spawn(async move {
-        let _ = ZingP2pNode::run(key_a, rx_a, store_a_clone, listen_a, vec![], vec![]).await;
+        let _ = ZingP2pNode::run(key_a, rx_a, store_a_clone, listen_a, vec![], vec![], None).await;
     });
 
     // Wait for Node A to start listening
@@ -59,6 +59,7 @@ async fn test_kad_start_providing_and_get_providers() {
             listen_b,
             vec![(peer_a, listen_a_for_b)],
             vec![],
+            None,
         ).await;
     });
 
