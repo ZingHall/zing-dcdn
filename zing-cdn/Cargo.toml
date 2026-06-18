@@ -8,11 +8,11 @@ exclude = ["zing-cdn-gui"]
 resolver = "2"
 
 [workspace.dependencies]
-# Walrus (local fork via file:// git URL with pinned rev)
-walrus-core = { git = "file:///Users/jareklin/dev/main/walrus", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-core" }
-walrus-sdk = { git = "file:///Users/jareklin/dev/main/walrus", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-sdk" }
-walrus-storage-node-client = { git = "file:///Users/jareklin/dev/main/walrus", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-storage-node-client" }
-walrus-sui = { git = "file:///Users/jareklin/dev/main/walrus", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-sui" }
+# Walrus (from GitHub with pinned rev)
+walrus-core = { git = "https://github.com/MystenLabs/walrus.git", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-core" }
+walrus-sdk = { git = "https://github.com/MystenLabs/walrus.git", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-sdk" }
+walrus-storage-node-client = { git = "https://github.com/MystenLabs/walrus.git", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-storage-node-client" }
+walrus-sui = { git = "https://github.com/MystenLabs/walrus.git", rev = "73eb7eb763561547148a8dd7a3044b46fe6c71c9", package = "walrus-sui" }
 
 # Sui (matching Walrus's versions — these come transitively through Walrus)
 # We only need the thin SDK types for our direct use
@@ -56,7 +56,7 @@ sha2 = "0.10"
 hex = "0.4"
 
 # Pin allocative to match Walrus's resolved version (0.3.4)
-allocative = "0.3.4"
+allocative = "=0.3.4"
 
 [profile.dev]
 opt-level = 0

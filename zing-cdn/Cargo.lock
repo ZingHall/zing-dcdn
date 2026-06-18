@@ -13925,7 +13925,7 @@ dependencies = [
 [[package]]
 name = "walrus-core"
 version = "1.51.0"
-source = "git+file:///Users/jareklin/dev/main/walrus?rev=73eb7eb763561547148a8dd7a3044b46fe6c71c9#73eb7eb763561547148a8dd7a3044b46fe6c71c9"
+source = "git+https://github.com/MystenLabs/walrus.git?rev=73eb7eb763561547148a8dd7a3044b46fe6c71c9#73eb7eb763561547148a8dd7a3044b46fe6c71c9"
 dependencies = [
  "base64 0.22.1",
  "bcs",
@@ -13946,7 +13946,7 @@ dependencies = [
 [[package]]
 name = "walrus-sdk"
 version = "1.51.0"
-source = "git+file:///Users/jareklin/dev/main/walrus?rev=73eb7eb763561547148a8dd7a3044b46fe6c71c9#73eb7eb763561547148a8dd7a3044b46fe6c71c9"
+source = "git+https://github.com/MystenLabs/walrus.git?rev=73eb7eb763561547148a8dd7a3044b46fe6c71c9#73eb7eb763561547148a8dd7a3044b46fe6c71c9"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -13991,7 +13991,7 @@ dependencies = [
 [[package]]
 name = "walrus-storage-node-client"
 version = "1.51.0"
-source = "git+file:///Users/jareklin/dev/main/walrus?rev=73eb7eb763561547148a8dd7a3044b46fe6c71c9#73eb7eb763561547148a8dd7a3044b46fe6c71c9"
+source = "git+https://github.com/MystenLabs/walrus.git?rev=73eb7eb763561547148a8dd7a3044b46fe6c71c9#73eb7eb763561547148a8dd7a3044b46fe6c71c9"
 dependencies = [
  "bcs",
  "bytes",
@@ -14026,7 +14026,7 @@ dependencies = [
 [[package]]
 name = "walrus-sui"
 version = "1.51.0"
-source = "git+file:///Users/jareklin/dev/main/walrus?rev=73eb7eb763561547148a8dd7a3044b46fe6c71c9#73eb7eb763561547148a8dd7a3044b46fe6c71c9"
+source = "git+https://github.com/MystenLabs/walrus.git?rev=73eb7eb763561547148a8dd7a3044b46fe6c71c9#73eb7eb763561547148a8dd7a3044b46fe6c71c9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -14085,7 +14085,7 @@ dependencies = [
 [[package]]
 name = "walrus-test-utils"
 version = "1.51.0"
-source = "git+file:///Users/jareklin/dev/main/walrus?rev=73eb7eb763561547148a8dd7a3044b46fe6c71c9#73eb7eb763561547148a8dd7a3044b46fe6c71c9"
+source = "git+https://github.com/MystenLabs/walrus.git?rev=73eb7eb763561547148a8dd7a3044b46fe6c71c9#73eb7eb763561547148a8dd7a3044b46fe6c71c9"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -14099,7 +14099,7 @@ dependencies = [
 [[package]]
 name = "walrus-utils"
 version = "1.51.0"
-source = "git+file:///Users/jareklin/dev/main/walrus?rev=73eb7eb763561547148a8dd7a3044b46fe6c71c9#73eb7eb763561547148a8dd7a3044b46fe6c71c9"
+source = "git+https://github.com/MystenLabs/walrus.git?rev=73eb7eb763561547148a8dd7a3044b46fe6c71c9#73eb7eb763561547148a8dd7a3044b46fe6c71c9"
 dependencies = [
  "anyhow",
  "bytes",
