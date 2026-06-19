@@ -1,0 +1,7 @@
+[settlement]
+package = "0xc584ff1d0d76f4da6aa3b9115263f248e1b0cf60b37d0fc96d2b49b2b72997c8"
+settlement_object = "0xc58e9b7417fdc83743b46a3f9009b10868f05bb1f2283f08c7021ac3e7f6c308"
+vault_object = "0x232e4605b0f81f8656f70451545ba279c5beb886f3e56796d3a3fa777f44e7ef"
+registry_version = 921074118
+settlement_version = 921074118
+vault_version = 921074119

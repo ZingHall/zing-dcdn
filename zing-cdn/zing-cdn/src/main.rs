@@ -209,7 +209,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    let vault_object_id_bytes: Option<[u8; 32]> = cli.vault_object.as_ref()
+    let vault_object_id_bytes: Option<[u8; 32]> = vault_object
         .and_then(|v| {
             let hex_str = v.strip_prefix("0x").unwrap_or(v);
             if hex_str.len() != 64 { return None; }

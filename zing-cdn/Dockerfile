@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/zing-cdn /usr/local/bin/
+COPY config.toml /root/.zing-cdn/config.toml
 
 ENV RUST_LOG=info
 EXPOSE 34291/udp
