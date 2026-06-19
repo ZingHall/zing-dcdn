@@ -44,22 +44,30 @@ impl ZingWallet {
                 .map_err(|e| ZingError::SuiClient(format!("keystore read: {}", e)))?
         ).map_err(|e| ZingError::SuiClient(format!("keystore parse: {}", e)))?;
 
-        // Decode first Ed25519 key (flag byte 0x00 + 32-byte seed)
+        // Get target address from client.yaml
+        let config_yaml = config_dir.join("client.yaml");
+        let target_address = parse_active_address(&config_yaml)
+            .ok_or_else(|| ZingError::SuiClient("no active_address in client.yaml".into()))?;
+
+        // Find Ed25519 key whose public key derives to the active address
         let keypair = keys_json.iter()
-            .find_map(|k| {
+            .filter_map(|k| {
                 let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k).ok()?;
                 if raw.len() == 33 && raw[0] == 0x00 {
                     let seed: [u8; 32] = raw[1..].try_into().ok()?;
-                    Some(Ed25519PrivateKey::new(seed))
+                    let kp = Ed25519PrivateKey::new(seed);
+                    let addr = kp.public_key().derive_address();
+                    if addr == target_address { Some(kp) } else { None }
                 } else {
                     None
                 }
             })
-            .ok_or_else(|| ZingError::SuiClient("no Ed25519 key found in keystore".into()))?;
+            .next()
+            .ok_or_else(|| ZingError::SuiClient(
+                "no Ed25519 key matching active_address in keystore".into()
+            ))?;
 
-        // Derive address from keypair's public key (Blake2b256)
-        // This guarantees the signer matches the PTB sender.
-        let address = keypair.public_key().derive_address();
+        let address = target_address;
 
         tracing::info!(%address, "Sui wallet loaded (new SDK)");
 
@@ -262,6 +270,20 @@ impl ZingWallet {
             payment_counter: AtomicU64::new(0),
         }
     }
+}
+
+fn parse_active_address(client_yaml: &Path) -> Option<Address> {
+    let content = std::fs::read_to_string(client_yaml).ok()?;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(addr_str) = trimmed.strip_prefix("active_address:") {
+            let addr_str = addr_str.trim().trim_matches('"').trim_end_matches(" ~");
+            if !addr_str.is_empty() && addr_str != "~" {
+                return addr_str.parse().ok();
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
