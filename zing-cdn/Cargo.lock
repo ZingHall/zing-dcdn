@@ -15551,6 +15551,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "bs58 0.5.1",
  "bytes",
  "chrono",
  "futures",

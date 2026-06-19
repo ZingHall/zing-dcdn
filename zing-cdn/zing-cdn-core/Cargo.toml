@@ -14,7 +14,7 @@ sui-sdk = { workspace = true }
 sui-sdk-types = { workspace = true }
 sui-crypto = { workspace = true }
 sui-rpc = { workspace = true }
-sui-transaction-builder = { workspace = true }
+sui-transaction-builder = { workspace = true, features = ["intents"] }
 
 # P2P
 libp2p = { workspace = true }
@@ -50,6 +50,7 @@ lru = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 base64 = "0.22"
+bs58 = "0.5"
 
 # Crypto & Encoding — comes transitively through walrus-core
 # reed-solomon-simd = { workspace = true }
