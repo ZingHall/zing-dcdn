@@ -162,6 +162,9 @@ async fn main() -> anyhow::Result<()> {
                         vault_object_id,
                         wal_coin_type: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL".into(),
                         wal_package_id,
+                        registry_initial_shared_version: 921074118,
+                        settlement_initial_shared_version: 921074118,
+                        vault_initial_shared_version: 921074119,
                     }
                 ),
                 _ => None,

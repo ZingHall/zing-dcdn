@@ -16,6 +16,12 @@ pub struct SettlementConfig {
     pub wal_coin_type: String,
     /// WAL package ID (for coin type in PTB)
     pub wal_package_id: ObjectID,
+    /// Initial shared version of Registry (query from suiscan or RPC)
+    pub registry_initial_shared_version: u64,
+    /// Initial shared version of Settlement
+    pub settlement_initial_shared_version: u64,
+    /// Initial shared version of PeerVault
+    pub vault_initial_shared_version: u64,
 }
 
 impl SettlementConfig {
@@ -36,6 +42,9 @@ impl SettlementConfig {
             wal_package_id: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59"
                 .parse()
                 .expect("invalid wal_package_id"),
+            registry_initial_shared_version: 921074118,
+            settlement_initial_shared_version: 921074118,
+            vault_initial_shared_version: 921074119,
         }
     }
 
@@ -71,7 +80,7 @@ impl SettlementConfig {
         let settlement_input = ptb.input(
             sui_sdk::types::transaction::CallArg::Object(ObjectArg::SharedObject {
                 id: self.settlement_object_id,
-                initial_shared_version: sui_sdk::types::base_types::SequenceNumber::from_u64(1),
+                initial_shared_version: sui_sdk::types::base_types::SequenceNumber::from_u64(self.settlement_initial_shared_version),
                 mutability: SharedObjectMutability::Immutable,
             }),
         )
@@ -80,7 +89,7 @@ impl SettlementConfig {
         let vault_input = ptb.input(
             sui_sdk::types::transaction::CallArg::Object(ObjectArg::SharedObject {
                 id: vault_obj_id,
-                initial_shared_version: sui_sdk::types::base_types::SequenceNumber::from_u64(1),
+                initial_shared_version: sui_sdk::types::base_types::SequenceNumber::from_u64(self.vault_initial_shared_version),
                 mutability: SharedObjectMutability::Mutable,
             }),
         )
@@ -145,7 +154,7 @@ impl SettlementConfig {
         let registry_input = ptb.input(
             sui_sdk::types::transaction::CallArg::Object(ObjectArg::SharedObject {
                 id: self.registry_object_id,
-                initial_shared_version: sui_sdk::types::base_types::SequenceNumber::from_u64(1),
+                initial_shared_version: sui_sdk::types::base_types::SequenceNumber::from_u64(self.registry_initial_shared_version),
                 mutability: SharedObjectMutability::Mutable,
             }),
         )
