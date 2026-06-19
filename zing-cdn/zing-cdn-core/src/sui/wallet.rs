@@ -32,18 +32,31 @@ impl ZingWallet {
             .unwrap_or_else(|_| "/tmp".to_string());
         let config_dir = std::path::PathBuf::from(&home).join(".sui").join("sui_config");
 
-        let keystore_file = keystore_path
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| config_dir.join("sui.keystore"));
+        // Keystore: env var or file
+        let keys_json: Vec<String> = if let Ok(json) = std::env::var("ZING_SUI_KEYSTORE_JSON") {
+            serde_json::from_str(&json)
+                .map_err(|e| ZingError::SuiClient(format!("env ZING_SUI_KEYSTORE_JSON: {}", e)))?
+        } else {
+            let keystore_file = keystore_path
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| config_dir.join("sui.keystore"));
+            serde_json::from_str(
+                &std::fs::read_to_string(&keystore_file)
+                    .map_err(|e| ZingError::SuiClient(format!("keystore read: {}", e)))?
+            ).map_err(|e| ZingError::SuiClient(format!("keystore parse: {}", e)))?
+        };
 
-        let keys_json: Vec<String> = serde_json::from_str(
-            &std::fs::read_to_string(&keystore_file)
-                .map_err(|e| ZingError::SuiClient(format!("keystore read: {}", e)))?
-        ).map_err(|e| ZingError::SuiClient(format!("keystore parse: {}", e)))?;
+        // Active address: env var or client.yaml
+        let target_address = if let Ok(addr_str) = std::env::var("ZING_SUI_ADDRESS") {
+            use std::str::FromStr;
+            Address::from_str(&addr_str)
+                .map_err(|e| ZingError::SuiClient(format!("env ZING_SUI_ADDRESS '{}': {}", addr_str, e)))?
+        } else {
+            parse_active_address(&config_dir.join("client.yaml"))
+                .ok_or_else(|| ZingError::SuiClient("no active_address in client.yaml or ZING_SUI_ADDRESS env".into()))?
+        };
 
-        let target_address = parse_active_address(&config_dir.join("client.yaml"))
-            .ok_or_else(|| ZingError::SuiClient("no active_address in client.yaml".into()))?;
-
+        // Find matching Ed25519 key
         let keypair = keys_json.iter()
             .filter_map(|k| {
                 let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k).ok()?;
