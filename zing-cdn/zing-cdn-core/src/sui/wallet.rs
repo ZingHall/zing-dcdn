@@ -33,12 +33,12 @@ impl ZingWallet {
         let config_dir = std::path::PathBuf::from(&home).join(".sui").join("sui_config");
 
         // Load keystore and derive address.
-        // Priority: ZING_SUI_PRIVATE_KEY (single key), ZING_SUI_KEYSTORE_JSON (array), file.
-        let (keypair, address) = if let Ok(key) = std::env::var("ZING_SUI_PRIVATE_KEY") {
+        // Priority: ZING_CDN_SUI_PRIVATE_KEY (single key), ZING_CDN_SUI_KEYSTORE_JSON (array), file.
+        let (keypair, address) = if let Ok(key) = std::env::var("ZING_CDN_SUI_PRIVATE_KEY") {
             decode_and_derive(vec![key])?
-        } else if let Ok(json) = std::env::var("ZING_SUI_KEYSTORE_JSON") {
+        } else if let Ok(json) = std::env::var("ZING_CDN_SUI_KEYSTORE_JSON") {
             let keys: Vec<String> = serde_json::from_str(&json)
-                .map_err(|e| ZingError::SuiClient(format!("env ZING_SUI_KEYSTORE_JSON: {}", e)))?;
+                .map_err(|e| ZingError::SuiClient(format!("env ZING_CDN_SUI_KEYSTORE_JSON: {}", e)))?;
             decode_and_derive(keys)?
         } else {
             let keystore_file = keystore_path
