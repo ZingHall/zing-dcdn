@@ -32,52 +32,33 @@ impl ZingWallet {
             .unwrap_or_else(|_| "/tmp".to_string());
         let config_dir = std::path::PathBuf::from(&home).join(".sui").join("sui_config");
 
-        // Keystore: env var (single key) or file
-        let keys_json: Vec<String> = if let Ok(key) = std::env::var("ZING_SUI_PRIVATE_KEY") {
-            vec![key]
+        // Load keystore and derive address.
+        // Priority: ZING_SUI_PRIVATE_KEY (single key), ZING_SUI_KEYSTORE_JSON (array), file.
+        let (keypair, address) = if let Ok(key) = std::env::var("ZING_SUI_PRIVATE_KEY") {
+            decode_and_derive(vec![key])?
         } else if let Ok(json) = std::env::var("ZING_SUI_KEYSTORE_JSON") {
-            serde_json::from_str(&json)
-                .map_err(|e| ZingError::SuiClient(format!("env ZING_SUI_KEYSTORE_JSON: {}", e)))?
+            let keys: Vec<String> = serde_json::from_str(&json)
+                .map_err(|e| ZingError::SuiClient(format!("env ZING_SUI_KEYSTORE_JSON: {}", e)))?;
+            decode_and_derive(keys)?
         } else {
             let keystore_file = keystore_path
                 .map(|p| p.to_path_buf())
                 .unwrap_or_else(|| config_dir.join("sui.keystore"));
-            serde_json::from_str(
+            let keys: Vec<String> = serde_json::from_str(
                 &std::fs::read_to_string(&keystore_file)
                     .map_err(|e| ZingError::SuiClient(format!("keystore read: {}", e)))?
-            ).map_err(|e| ZingError::SuiClient(format!("keystore parse: {}", e)))?
+            ).map_err(|e| ZingError::SuiClient(format!("keystore parse: {}", e)))?;
+
+            let target = parse_active_address(&config_dir.join("client.yaml"))
+                .ok_or_else(|| ZingError::SuiClient("no active_address in client.yaml".into()))?;
+
+            decode_first_matching(keys, target)?
         };
 
-        // Active address: env var or client.yaml
-        let target_address = if let Ok(addr_str) = std::env::var("ZING_SUI_ADDRESS") {
-            use std::str::FromStr;
-            Address::from_str(&addr_str)
-                .map_err(|e| ZingError::SuiClient(format!("env ZING_SUI_ADDRESS '{}': {}", addr_str, e)))?
-        } else {
-            parse_active_address(&config_dir.join("client.yaml"))
-                .ok_or_else(|| ZingError::SuiClient("no active_address in client.yaml or ZING_SUI_ADDRESS env".into()))?
-        };
-
-        // Find matching Ed25519 key
-        let keypair = keys_json.iter()
-            .filter_map(|k| {
-                let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k).ok()?;
-                if raw.len() == 33 && raw[0] == 0x00 {
-                    let seed: [u8; 32] = raw[1..].try_into().ok()?;
-                    let kp = Ed25519PrivateKey::new(seed);
-                    let addr = kp.public_key().derive_address();
-                    if addr == target_address { Some(kp) } else { None }
-                } else { None }
-            })
-            .next()
-            .ok_or_else(|| ZingError::SuiClient(
-                "no Ed25519 key matching active_address in keystore".into()
-            ))?;
-
-        tracing::info!(address = %target_address, "Sui wallet loaded");
+        tracing::info!(address = %address, "Sui wallet loaded");
 
         Ok(Self {
-            address: target_address,
+            address,
             keypair,
             settlement,
             rpc_url: "https://fullnode.mainnet.sui.io:443".into(),
@@ -205,6 +186,38 @@ impl ZingWallet {
             payment_counter: AtomicU64::new(0),
         }
     }
+}
+
+fn decode_and_derive(keys: Vec<String>) -> ZingResult<(Ed25519PrivateKey, Address)> {
+    for k in &keys {
+        let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k)
+            .map_err(|e| ZingError::SuiClient(format!("key decode: {}", e)))?;
+        if raw.len() == 33 && raw[0] == 0x00 {
+            let seed: [u8; 32] = raw[1..].try_into()
+                .map_err(|_| ZingError::SuiClient("invalid key length".into()))?;
+            let kp = Ed25519PrivateKey::new(seed);
+            let addr = kp.public_key().derive_address();
+            return Ok((kp, addr));
+        }
+    }
+    Err(ZingError::SuiClient("no Ed25519 key found".into()))
+}
+
+fn decode_first_matching(keys: Vec<String>, target: Address) -> ZingResult<(Ed25519PrivateKey, Address)> {
+    for k in &keys {
+        let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k)
+            .map_err(|e| ZingError::SuiClient(format!("key decode: {}", e)))?;
+        if raw.len() == 33 && raw[0] == 0x00 {
+            let seed: [u8; 32] = raw[1..].try_into()
+                .map_err(|_| ZingError::SuiClient("invalid key length".into()))?;
+            let kp = Ed25519PrivateKey::new(seed);
+            let addr = kp.public_key().derive_address();
+            if addr == target {
+                return Ok((kp, addr));
+            }
+        }
+    }
+    Err(ZingError::SuiClient("no Ed25519 key matching active_address".into()))
 }
 
 fn parse_active_address(client_yaml: &Path) -> Option<Address> {
