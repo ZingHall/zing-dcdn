@@ -10,6 +10,9 @@ use tracing_subscriber::EnvFilter;
 use walrus_core::metadata::BlobMetadataApi;
 use walrus_core::BlobId;
 
+mod config;
+use config::ZingConfig;
+
 use zing_cdn_core::cache::eviction::EvictionManager;
 use zing_cdn_core::cache::pinning::PinningManager;
 use zing_cdn_core::cache::store::BlobStore;
@@ -103,6 +106,8 @@ enum Command {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let config = ZingConfig::load();
+    let settlement_cfg = config.settlement.as_ref();
 
     let filter = if cli.verbose {
         EnvFilter::from_default_env()
@@ -134,20 +139,27 @@ async fn main() -> anyhow::Result<()> {
 
     let keystore_path = cli.sui_keystore.as_ref().map(|s| resolve_cache_dir(s));
 
-    // Build settlement config first (needed for wallet)
-    let settlement_config: Option<SettlementConfig> = match (
-        &cli.settlement_package,
-        &cli.settlement_object,
-    ) {
+    // Build settlement config from config file + CLI flags
+    let settlement_package = cli.settlement_package.as_ref()
+        .or_else(|| settlement_cfg.and_then(|c| c.package.as_ref()));
+    let settlement_object = cli.settlement_object.as_ref()
+        .or_else(|| settlement_cfg.and_then(|c| c.settlement_object.as_ref()));
+    let vault_object = cli.vault_object.as_ref()
+        .or_else(|| settlement_cfg.and_then(|c| c.vault_object.as_ref()));
+    let registry_object = cli.registry_object.as_ref()
+        .or_else(|| settlement_cfg.and_then(|c| c.registry_object.as_ref()));
+    let registry_ver = settlement_cfg.and_then(|c| c.registry_version).unwrap_or(921074118);
+    let settlement_ver = settlement_cfg.and_then(|c| c.settlement_version).unwrap_or(921074118);
+    let vault_ver = settlement_cfg.and_then(|c| c.vault_version).unwrap_or(921074119);
+
+    let settlement_config: Option<SettlementConfig> = match (settlement_package, settlement_object) {
         (Some(pkg), Some(obj)) => {
             let package_id = pkg.parse()
                 .map_err(|e| tracing::warn!(%e, "invalid settlement-package")).ok();
             let settlement_object_id = obj.parse()
                 .map_err(|e| tracing::warn!(%e, "invalid settlement-object")).ok();
-            let vault_object_id = cli.vault_object.as_ref()
-                .and_then(|v| v.parse().ok());
-            let registry_object_id = cli.registry_object.as_ref()
-                .and_then(|v| v.parse().ok())
+            let vault_object_id = vault_object.and_then(|v| v.parse().ok());
+            let registry_object_id = registry_object.and_then(|v| v.parse().ok())
                 .unwrap_or_else(|| "0x97b5153b9e9897ad1630cdd06e5caa81ebbf8865e96003f38e50c5f1d6752527"
                     .parse().expect("hardcoded registry_object_id"));
             let wal_package_id = "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59"
@@ -162,9 +174,9 @@ async fn main() -> anyhow::Result<()> {
                         vault_object_id,
                         wal_coin_type: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL".into(),
                         wal_package_id,
-                        registry_initial_shared_version: 921074118,
-                        settlement_initial_shared_version: 921074118,
-                        vault_initial_shared_version: 921074119,
+                        registry_initial_shared_version: registry_ver,
+                        settlement_initial_shared_version: settlement_ver,
+                        vault_initial_shared_version: vault_ver,
                     }
                 ),
                 _ => None,
