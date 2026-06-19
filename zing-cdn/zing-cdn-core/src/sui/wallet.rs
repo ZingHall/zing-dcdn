@@ -57,9 +57,9 @@ impl ZingWallet {
             })
             .ok_or_else(|| ZingError::SuiClient("no Ed25519 key found in keystore".into()))?;
 
-        // Get active address from client.yaml
-        let address = parse_active_address(&config_dir.join("client.yaml"))
-            .ok_or_else(|| ZingError::SuiClient("no active_address in client.yaml".into()))?;
+        // Derive address from keypair's public key (Blake2b256)
+        // This guarantees the signer matches the PTB sender.
+        let address = keypair.public_key().derive_address();
 
         tracing::info!(%address, "Sui wallet loaded (new SDK)");
 
@@ -249,25 +249,6 @@ impl ZingWallet {
             proof = %hex::encode(digest), "WAL payment (synthetic proof)");
         Ok(digest)
     }
-}
-
-fn parse_active_address(client_yaml: &Path) -> Option<Address> {
-    let content = std::fs::read_to_string(client_yaml).ok()?;
-    for line in content.lines() {
-        if let Some(addr_str) = line.trim().strip_prefix("active_address: \"") {
-            let addr_str = addr_str.trim_end_matches('"').trim_end_matches(" ~");
-            if !addr_str.is_empty() && addr_str != "~" {
-                return addr_str.parse().ok();
-            }
-        }
-        if let Some(addr_str) = line.trim().strip_prefix("active_address: ") {
-            let addr_str = addr_str.trim_matches('"').trim_end_matches(" ~");
-            if !addr_str.is_empty() && addr_str != "~" {
-                return addr_str.parse().ok();
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]
