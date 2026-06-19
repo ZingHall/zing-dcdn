@@ -179,7 +179,11 @@ fn main() {
                     }
                 }
             };
-            let sui_address_bytes = wallet.as_ref().map(|w| w.address().to_inner());
+            let sui_address_bytes = wallet.as_ref().map(|w| {
+                let addr = w.address();
+                let bytes: [u8; 32] = addr.into();
+                bytes
+            });
 
             // Parse vault object ID for Kad DHT publishing
             let vault_object_id_bytes: Option<[u8; 32]> = settlement_cfg

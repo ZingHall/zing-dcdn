@@ -17,8 +17,10 @@ walrus-utils = { git = "https://github.com/MystenLabs/walrus.git", rev = "73eb7e
 
 # Sui (matching Walrus's versions — these come transitively through Walrus)
 # We only need the thin SDK types for our direct use
-sui-sdk-types = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = "5b41bc701525f1b94f1fe63008d4841bc6fb1065", features = ["hash", "serde"] }
-sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = "5b41bc701525f1b94f1fe63008d4841bc6fb1065" }
+sui-sdk-types = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = "e494a36a76a0aab8c5d66d5557995faee5c1fb09", features = ["hash", "serde"] }
+sui-crypto = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = "e494a36a76a0aab8c5d66d5557995faee5c1fb09", features = ["ed25519"] }
+sui-rpc = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = "e494a36a76a0aab8c5d66d5557995faee5c1fb09" }
+sui-transaction-builder = { git = "https://github.com/MystenLabs/sui-rust-sdk.git", rev = "e494a36a76a0aab8c5d66d5557995faee5c1fb09", default-features = false, features = ["intents"] }
 sui-sdk = { git = "https://github.com/MystenLabs/sui", tag = "testnet-v1.73.0" }
 
 # P2P

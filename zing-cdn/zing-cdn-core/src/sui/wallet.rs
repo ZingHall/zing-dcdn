@@ -1,11 +1,14 @@
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
-use sui_sdk::SuiClientBuilder;
-use sui_sdk::types::base_types::SuiAddress;
-use sui_sdk::wallet_context::WalletContext;
+use sui_crypto::ed25519::Ed25519PrivateKey;
+use sui_crypto::SuiSigner;
+use sui_rpc::field::FieldMaskUtil;
+use sui_sdk_types::Address;
 
 use crate::types::{ZingError, ZingResult};
 
@@ -14,10 +17,10 @@ use super::settlement::SettlementConfig;
 pub type PaymentProof = [u8; 32];
 
 pub struct ZingWallet {
-    address: SuiAddress,
-    wallet_ctx: Option<WalletContext>,
-    sui_client: Option<Arc<sui_sdk::SuiClient>>,
+    address: Address,
+    keypair: Ed25519PrivateKey,
     settlement: Option<SettlementConfig>,
+    rpc_url: String,
     payment_counter: AtomicU64,
 }
 
@@ -26,45 +29,56 @@ impl ZingWallet {
         keystore_path: Option<&Path>,
         settlement: Option<SettlementConfig>,
     ) -> ZingResult<Self> {
-        let config_path = keystore_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
-            let home = std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_else(|_| "/tmp".to_string());
-            std::path::PathBuf::from(home)
-                .join(".sui")
-                .join("sui_config")
-                .join("client.yaml")
-        });
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| "/tmp".to_string());
+        let config_dir = std::path::PathBuf::from(&home).join(".sui").join("sui_config");
 
-        let mut wallet_ctx = WalletContext::new(&config_path)
-            .map_err(|e| ZingError::SuiClient(format!("failed to load wallet: {}", e)))?;
+        // Load keystore
+        let keystore_file = keystore_path
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| config_dir.join("sui.keystore"));
 
-        let address = wallet_ctx.active_address()
-            .map_err(|e| ZingError::SuiClient(format!("active address: {}", e)))?;
+        let keys_json: Vec<String> = serde_json::from_str(
+            &std::fs::read_to_string(&keystore_file)
+                .map_err(|e| ZingError::SuiClient(format!("keystore read: {}", e)))?
+        ).map_err(|e| ZingError::SuiClient(format!("keystore parse: {}", e)))?;
 
-        let sui_client = SuiClientBuilder::default()
-            .build("https://fullnode.mainnet.sui.io:443")
-            .await
-            .map_err(|e| ZingError::SuiClient(format!("sui client: {}", e)))?;
+        // Decode first Ed25519 key (flag byte 0x00 + 32-byte seed)
+        let keypair = keys_json.iter()
+            .find_map(|k| {
+                let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k).ok()?;
+                if raw.len() == 33 && raw[0] == 0x00 {
+                    let seed: [u8; 32] = raw[1..].try_into().ok()?;
+                    Some(Ed25519PrivateKey::new(seed))
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| ZingError::SuiClient("no Ed25519 key found in keystore".into()))?;
 
-        tracing::info!(%address, "Sui wallet loaded with mainnet connection");
+        // Get active address from client.yaml
+        let address = parse_active_address(&config_dir.join("client.yaml"))
+            .ok_or_else(|| ZingError::SuiClient("no active_address in client.yaml".into()))?;
+
+        tracing::info!(%address, "Sui wallet loaded (new SDK)");
 
         Ok(Self {
             address,
-            wallet_ctx: Some(wallet_ctx),
-            sui_client: Some(Arc::new(sui_client)),
+            keypair,
             settlement,
+            rpc_url: "https://fullnode.mainnet.sui.io:443".into(),
             payment_counter: AtomicU64::new(0),
         })
     }
 
-    pub fn address(&self) -> SuiAddress {
+    pub fn address(&self) -> Address {
         self.address
     }
 
     pub async fn pay_wal(
         &self,
-        recipient: SuiAddress,
+        recipient: Address,
         blob_hash: &[u8; 32],
         amount_nanos: u64,
     ) -> ZingResult<PaymentProof> {
@@ -85,54 +99,74 @@ impl ZingWallet {
     async fn try_onchain_pay(
         &self,
         settlement: &SettlementConfig,
-        recipient: SuiAddress,
+        recipient: Address,
         blob_hash: &[u8; 32],
         amount_nanos: u64,
     ) -> ZingResult<PaymentProof> {
-        let wallet_ctx = self.wallet_ctx.as_ref()
-            .ok_or_else(|| ZingError::SuiClient("no wallet context".into()))?;
-        let sui_client = self.sui_client.as_ref()
-            .ok_or_else(|| ZingError::SuiClient("no sui client".into()))?;
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc client: {}", e)))?;
 
-        let gas = wallet_ctx
-            .get_one_gas_object_owned_by_address(self.address)
-            .await
-            .map_err(|e| ZingError::SuiClient(format!("gas: {}", e)))?
-            .ok_or_else(|| ZingError::SuiClient("no gas coins".into()))?;
-
-        let wal_type = &settlement.wal_coin_type;
-        let wal_coins = sui_client
-            .coin_read_api()
-            .get_coins(self.address, Some(wal_type.clone()), None, None)
+        // Select WAL payment coin
+        let wal_type = sui_sdk_types::TypeTag::from_str(&settlement.wal_coin_type)
+            .map_err(|e| ZingError::SuiClient(format!("wal type: {}", e)))?;
+        let wal_coins = client
+            .select_coins(&self.address, &wal_type, amount_nanos, &[])
             .await
             .map_err(|e| ZingError::SuiClient(format!("wal coins: {}", e)))?;
 
-        let wal_coin = wal_coins.data.iter()
-            .find(|c| c.balance >= amount_nanos)
-            .ok_or_else(|| ZingError::SuiClient(format!(
-                "insufficient WAL: need {} frost, have {} coins",
-                amount_nanos, wal_coins.data.len()
-            )))?;
+        let wal_coin = wal_coins.first()
+            .ok_or_else(|| ZingError::SuiClient("no WAL coins found".into()))?;
 
-        let payment_coin_ref = (wal_coin.coin_object_id, wal_coin.version, wal_coin.digest);
+        let coin_id = Address::from_str(wal_coin.object_id())
+            .map_err(|e| ZingError::SuiClient(format!("coin id: {}", e)))?;
+        let coin_digest = sui_sdk_types::Digest::from_str(wal_coin.digest())
+            .map_err(|e| ZingError::SuiClient(format!("coin digest: {}", e)))?;
 
-        let tx_data = settlement.build_pay_transaction(
-            self.address, recipient, blob_hash,
-            payment_coin_ref, gas, 5_000_000, 1_000,
-        ).map_err(|e| ZingError::SuiClient(format!("ptb: {}", e)))?;
+        // Build PTB
+        let tx = settlement.build_pay_transaction(
+            self.address,
+            recipient,
+            blob_hash,
+            (coin_id, wal_coin.version(), coin_digest),
+            5_000_000,
+        );
 
-        let signed = wallet_ctx.sign_transaction(&tx_data).await;
-        let effects = wallet_ctx
-            .execute_transaction_may_fail(signed)
+        // Build (auto-selects gas)
+        let transaction = tx
+            .build(&mut client)
             .await
-            .map_err(|e| ZingError::SuiClient(format!("tx: {}", e)))?;
+            .map_err(|e| ZingError::SuiClient(format!("tx build: {}", e)))?;
 
-        let digest: [u8; 32] = effects.transaction.digest().into_inner();
+        // Sign
+        let signature = self.keypair
+            .sign_transaction(&transaction)
+            .map_err(|e| ZingError::SuiClient(format!("sign: {}", e)))?;
+
+        // Submit
+        let request = sui_rpc::proto::sui::rpc::v2::ExecuteTransactionRequest::new(transaction.into())
+            .with_signatures(vec![signature.into()])
+            .with_read_mask(sui_rpc::field::FieldMask::from_paths(vec!["digest"]));
+
+        let response = client
+            .execute_transaction_and_wait_for_checkpoint(request, Duration::from_secs(60))
+            .await
+            .map_err(|e| ZingError::SuiClient(format!("tx submit: {}", e)))?
+            .into_inner();
+
+        let digest_str = response
+            .transaction
+            .as_ref()
+            .and_then(|t| t.digest.clone())
+            .ok_or_else(|| ZingError::SuiClient("no digest in response".into()))?;
+
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&hex::decode(&digest_str)
+            .map_err(|e| ZingError::SuiClient(format!("digest decode: {}", e)))?);
+
         let counter = self.payment_counter.fetch_add(1, Ordering::Relaxed) + 1;
-
         tracing::info!(
             recipient = %recipient, amount = amount_nanos, counter = counter,
-            tx_digest = %hex::encode(digest),
+            tx_digest = %digest_str,
             "WAL payment — on-chain settlement::pay executed"
         );
 
@@ -143,44 +177,53 @@ impl ZingWallet {
         let settlement = match &self.settlement {
             Some(s) => s, None => return Ok(()),
         };
-        let wallet_ctx = self.wallet_ctx.as_ref()
-            .ok_or_else(|| ZingError::SuiClient("no wallet context".into()))?;
-        let sui_client = self.sui_client.as_ref()
-            .ok_or_else(|| ZingError::SuiClient("no sui client".into()))?;
 
-        let gas = wallet_ctx
-            .get_one_gas_object_owned_by_address(self.address)
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
+
+        let min_bond = 1_000_000_000u64;
+        let wal_type = sui_sdk_types::TypeTag::from_str(&settlement.wal_coin_type)
+            .map_err(|e| ZingError::SuiClient(format!("wal type: {}", e)))?;
+        let wal_coins = client
+            .select_coins(&self.address, &wal_type, min_bond, &[])
             .await
-            .map_err(|e| ZingError::SuiClient(format!("gas: {}", e)))?
-            .ok_or_else(|| ZingError::SuiClient("no gas coins".into()))?;
+            .map_err(|e| ZingError::SuiClient(format!("wal coins: {}", e)))?;
 
-        let min_bond = 1_000_000_000u64;  // 1 WAL in frost
-        let wal_type = &settlement.wal_coin_type;
-        let wal_coins = sui_client
-            .coin_read_api()
-            .get_coins(self.address, Some(wal_type.clone()), None, None)
+        let bond_coin = wal_coins.first()
+            .ok_or_else(|| ZingError::SuiClient("no WAL coins for bond".into()))?;
+
+        let coin_id = Address::from_str(bond_coin.object_id())
+            .map_err(|e| ZingError::SuiClient(format!("coin id: {}", e)))?;
+        let coin_digest = sui_sdk_types::Digest::from_str(bond_coin.digest())
+            .map_err(|e| ZingError::SuiClient(format!("coin digest: {}", e)))?;
+
+        let tx = settlement.build_register_transaction(
+            self.address,
+            peer_id_bytes,
+            (coin_id, bond_coin.version(), coin_digest),
+            10_000_000,
+        );
+
+        let transaction = tx.build(&mut client).await
+            .map_err(|e| ZingError::SuiClient(format!("register build: {}", e)))?;
+
+        let signature = self.keypair.sign_transaction(&transaction)
+            .map_err(|e| ZingError::SuiClient(format!("sign: {}", e)))?;
+
+        let request = sui_rpc::proto::sui::rpc::v2::ExecuteTransactionRequest::new(transaction.into())
+            .with_signatures(vec![signature.into()]);
+
+        let response = client
+            .execute_transaction_and_wait_for_checkpoint(request, Duration::from_secs(60))
             .await
-            .map_err(|e| ZingError::SuiClient(format!("wal: {}", e)))?;
+            .map_err(|e| ZingError::SuiClient(format!("register tx: {}", e)))?
+            .into_inner();
 
-        let bond_coin = wal_coins.data.iter()
-            .find(|c| c.balance >= min_bond)
-            .ok_or_else(|| ZingError::SuiClient(format!(
-                "insufficient WAL for bond (need {} frost, have {} coins)",
-                min_bond, wal_coins.data.len()
-            )))?;
+        let digest_str = response.transaction.as_ref()
+            .and_then(|t| t.digest.clone())
+            .unwrap_or_default();
 
-        let bond_ref = (bond_coin.coin_object_id, bond_coin.version, bond_coin.digest);
-        let tx_data = settlement.build_register_transaction(
-            self.address, peer_id_bytes, bond_ref, gas, 10_000_000, 1_000,
-        ).map_err(|e| ZingError::SuiClient(format!("register ptb: {}", e)))?;
-
-        let signed = wallet_ctx.sign_transaction(&tx_data).await;
-        let effects = wallet_ctx
-            .execute_transaction_may_fail(signed)
-            .await
-            .map_err(|e| ZingError::SuiClient(format!("register tx: {}", e)))?;
-
-        tracing::info!(tx_digest = %effects.transaction.digest(), "Peer registered on-chain");
+        tracing::info!(tx_digest = %digest_str, "Peer registered on-chain");
         Ok(())
     }
 
@@ -190,32 +233,51 @@ impl ZingWallet {
 
     fn synthetic_pay(
         &self,
-        recipient: SuiAddress,
+        recipient: Address,
         blob_hash: &[u8; 32],
         amount_nanos: u64,
     ) -> ZingResult<PaymentProof> {
         let counter = self.payment_counter.fetch_add(1, Ordering::Relaxed) + 1;
         let mut hasher = Sha256::new();
         hasher.update(b"zing-payment-v1");
-        hasher.update(&recipient.to_vec());
+        hasher.update(recipient.to_string().as_bytes());
         hasher.update(blob_hash);
         hasher.update(&amount_nanos.to_le_bytes());
         hasher.update(&counter.to_le_bytes());
         let digest: [u8; 32] = hasher.finalize().into();
-        tracing::info!(recipient = %recipient, amount = amount_nanos, counter = counter,
+        tracing::info!(?recipient, amount = amount_nanos, counter = counter,
             proof = %hex::encode(digest), "WAL payment (synthetic proof)");
         Ok(digest)
     }
+}
+
+fn parse_active_address(client_yaml: &Path) -> Option<Address> {
+    let content = std::fs::read_to_string(client_yaml).ok()?;
+    for line in content.lines() {
+        if let Some(addr_str) = line.trim().strip_prefix("active_address: \"") {
+            let addr_str = addr_str.trim_end_matches('"').trim_end_matches(" ~");
+            if !addr_str.is_empty() && addr_str != "~" {
+                return addr_str.parse().ok();
+            }
+        }
+        if let Some(addr_str) = line.trim().strip_prefix("active_address: ") {
+            let addr_str = addr_str.trim_matches('"').trim_end_matches(" ~");
+            if !addr_str.is_empty() && addr_str != "~" {
+                return addr_str.parse().ok();
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
 impl ZingWallet {
     pub fn test_wallet() -> Self {
         Self {
-            address: SuiAddress::random_for_testing_only(),
-            wallet_ctx: None,
-            sui_client: None,
+            address: Address::ZERO,
+            keypair: Ed25519PrivateKey::new([0u8; 32]),
             settlement: None,
+            rpc_url: String::new(),
             payment_counter: AtomicU64::new(0),
         }
     }
@@ -228,7 +290,7 @@ mod tests {
     #[tokio::test]
     async fn test_synthetic_pay_returns_non_zero_proof() {
         let wallet = ZingWallet::test_wallet();
-        let recipient = SuiAddress::random_for_testing_only();
+        let recipient = Address::ZERO;
         let blob_hash = [1u8; 32];
         let amount = 1_000_000u64;
         let proof = wallet.synthetic_pay(recipient, &blob_hash, amount).unwrap();
@@ -239,7 +301,7 @@ mod tests {
     #[tokio::test]
     async fn test_synthetic_pay_counter_increments() {
         let wallet = ZingWallet::test_wallet();
-        let recipient = SuiAddress::random_for_testing_only();
+        let recipient = Address::ZERO;
         let blob_hash = [2u8; 32];
         let amount = 100u64;
         let proof1 = wallet.synthetic_pay(recipient, &blob_hash, amount).unwrap();

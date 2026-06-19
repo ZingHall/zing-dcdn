@@ -17,7 +17,7 @@ use walrus_core::BlobId;
 
 use crate::p2p::node::P2pCommand;
 use crate::sui::wallet::ZingWallet;
-use sui_sdk::types::base_types::SuiAddress;
+use sui_sdk_types::Address;
 
 const READ_FEE_WAL_NANOS: u64 = 1_000_000;
 const FEE_PER_BYTE_NANOS: u64 = 1;
@@ -94,7 +94,7 @@ impl Resolver {
         };
         match cached {
             Some(Some(addr)) => {
-                let recipient = match SuiAddress::from_bytes(addr) {
+                let recipient = match Address::from_bytes(addr) {
                     Ok(a) => a,
                     Err(e) => {
                         tracing::warn!(?addr, %e, "Invalid Sui address in cache");
@@ -143,7 +143,7 @@ impl Resolver {
         match result {
             None => [0u8; 32],
             Some(addr) => {
-                let recipient = match SuiAddress::from_bytes(addr) {
+                let recipient = match Address::from_bytes(addr) {
                     Ok(a) => a,
                     Err(e) => {
                         tracing::warn!(?addr, %e, "Invalid Sui address from DHT");

@@ -193,7 +193,11 @@ async fn main() -> anyhow::Result<()> {
             None
         }
     };
-    let sui_address_bytes = wallet.as_ref().map(|w| w.address().to_inner());
+    let sui_address_bytes = wallet.as_ref().map(|w| {
+        let addr = w.address();
+        let bytes: [u8; 32] = addr.into();
+        bytes
+    });
 
     // Auto-register peer if wallet + settlement config are set
     if let Some(ref wallet) = wallet {

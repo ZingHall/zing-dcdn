@@ -1,21 +1,19 @@
-use sui_sdk::types::base_types::{ObjectID, SuiAddress};
-
 /// Configuration for the on-chain settlement contract.
 /// Stores the deployed package and shared object IDs on Sui mainnet.
 #[derive(Debug, Clone)]
 pub struct SettlementConfig {
     /// Package ID of the deployed zing_cdn package
-    pub package_id: ObjectID,
+    pub package_id: sui_sdk_types::Address,
     /// Object ID of the shared Settlement object
-    pub settlement_object_id: ObjectID,
+    pub settlement_object_id: sui_sdk_types::Address,
     /// Object ID of the shared Registry object (for auto-registration)
-    pub registry_object_id: ObjectID,
+    pub registry_object_id: sui_sdk_types::Address,
     /// Object ID of the serving peer's PeerVault (per-fetch)
-    pub vault_object_id: Option<ObjectID>,
+    pub vault_object_id: Option<sui_sdk_types::Address>,
     /// WAL coin type: "0x356a...::wal::WAL"
     pub wal_coin_type: String,
     /// WAL package ID (for coin type in PTB)
-    pub wal_package_id: ObjectID,
+    pub wal_package_id: sui_sdk_types::Address,
     /// Initial shared version of Registry (query from suiscan or RPC)
     pub registry_initial_shared_version: u64,
     /// Initial shared version of Settlement
@@ -26,7 +24,7 @@ pub struct SettlementConfig {
 
 impl SettlementConfig {
     /// Creates a SettlementConfig with mainnet addresses.
-    pub fn mainnet(vault_object_id: ObjectID) -> Self {
+    pub fn mainnet(vault_object_id: sui_sdk_types::Address) -> Self {
         Self {
             package_id: "0xc584ff1d0d76f4da6aa3b9115263f248e1b0cf60b37d0fc96d2b49b2b72997c8"
                 .parse()
@@ -48,145 +46,91 @@ impl SettlementConfig {
         }
     }
 
-    /// Builds a ProgrammableTransaction that calls settlement::pay().
+    /// Builds a PTB that calls settlement::pay().
     pub fn build_pay_transaction(
         &self,
-        sender: SuiAddress,
-        recipient: SuiAddress,
+        sender: sui_sdk_types::Address,
+        recipient: sui_sdk_types::Address,
         blob_hash: &[u8; 32],
-        payment_coin: sui_sdk::types::base_types::ObjectRef,
-        gas_coin: sui_sdk::types::base_types::ObjectRef,
+        payment_coin: (sui_sdk_types::Address, u64, sui_sdk_types::Digest),
         gas_budget: u64,
-        gas_price: u64,
-    ) -> Result<sui_sdk::types::transaction::TransactionData, anyhow::Error> {
-        use sui_sdk::types::{
-            programmable_transaction_builder::ProgrammableTransactionBuilder,
-            transaction::{TransactionData, TransactionDataV1, ObjectArg, SharedObjectMutability},
-        };
+    ) -> sui_transaction_builder::TransactionBuilder {
+        let mut tx = sui_transaction_builder::TransactionBuilder::new();
 
-        let vault_obj_id = self
-            .vault_object_id
-            .ok_or_else(|| anyhow::anyhow!("vault_object_id not set"))?;
+        let vault_obj_id = self.vault_object_id
+            .expect("vault_object_id not set");
 
-        let mut ptb = ProgrammableTransactionBuilder::new();
-
-        let payment_input = ptb.input(
-            sui_sdk::types::transaction::CallArg::Object(ObjectArg::ImmOrOwnedObject(
-                payment_coin,
-            )),
-        )
-        .map_err(|e| anyhow::anyhow!("ptb input error: {}", e))?;
-
-        let settlement_input = ptb.input(
-            sui_sdk::types::transaction::CallArg::Object(ObjectArg::SharedObject {
-                id: self.settlement_object_id,
-                initial_shared_version: sui_sdk::types::base_types::SequenceNumber::from_u64(self.settlement_initial_shared_version),
-                mutability: SharedObjectMutability::Immutable,
-            }),
-        )
-        .map_err(|e| anyhow::anyhow!("ptb input error: {}", e))?;
-
-        let vault_input = ptb.input(
-            sui_sdk::types::transaction::CallArg::Object(ObjectArg::SharedObject {
-                id: vault_obj_id,
-                initial_shared_version: sui_sdk::types::base_types::SequenceNumber::from_u64(self.vault_initial_shared_version),
-                mutability: SharedObjectMutability::Mutable,
-            }),
-        )
-        .map_err(|e| anyhow::anyhow!("ptb input error: {}", e))?;
-
-        let payee_input = ptb.pure(recipient.to_vec())
-            .map_err(|e| anyhow::anyhow!("ptb pure error: {}", e))?;
-        let blob_hash_input = ptb.pure(blob_hash.to_vec())
-            .map_err(|e| anyhow::anyhow!("ptb pure error: {}", e))?;
-
-        let module = sui_sdk::types::Identifier::new("settlement")
-            .map_err(|e| anyhow::anyhow!("invalid module name: {}", e))?;
-        let function = sui_sdk::types::Identifier::new("pay")
-            .map_err(|e| anyhow::anyhow!("invalid function name: {}", e))?;
-        ptb.command(sui_sdk::types::transaction::Command::move_call(
-            self.package_id,
-            module,
-            function,
-            vec![],
-            vec![settlement_input, vault_input, payee_input, blob_hash_input, payment_input],
+        // Payment coin input
+        let payment_input = tx.object(sui_transaction_builder::ObjectInput::owned(
+            payment_coin.0, payment_coin.1, payment_coin.2,
         ));
 
-        let pt = ptb.finish();
+        // Settlement shared object (immutable)
+        let settlement_input = tx.object(sui_transaction_builder::ObjectInput::shared(
+            self.settlement_object_id,
+            self.settlement_initial_shared_version,
+            false,
+        ));
 
-        Ok(TransactionData::V1(TransactionDataV1 {
-            kind: sui_sdk::types::transaction::TransactionKind::ProgrammableTransaction(pt),
-            sender,
-            gas_data: sui_sdk::types::transaction::GasData {
-                payment: vec![gas_coin],
-                owner: sender,
-                price: gas_price,
-                budget: gas_budget,
-            },
-            expiration: sui_sdk::types::transaction::TransactionExpiration::None,
-        }))
+        // Vault shared object (mutable)
+        let vault_input = tx.object(sui_transaction_builder::ObjectInput::shared(
+            vault_obj_id,
+            self.vault_initial_shared_version,
+            true,
+        ));
+
+        // Pure inputs — Address and Vec<u8> are auto-encoded correctly
+        let payee_input = tx.pure(&recipient);
+        let blob_hash_input = {let v = blob_hash.to_vec(); tx.pure(&v)};
+
+        // settlement::pay(Settlement, Vault, payee, blob_hash, coin)
+        tx.move_call(
+            sui_transaction_builder::Function::new(
+                self.package_id,
+                sui_sdk_types::Identifier::from_static("settlement"),
+                sui_sdk_types::Identifier::from_static("pay"),
+            ),
+            vec![settlement_input, vault_input, payee_input, blob_hash_input, payment_input],
+        );
+
+        tx.set_sender(sender);
+        tx.set_gas_budget(gas_budget);
+        tx
     }
 
     /// Builds a PTB that calls staking::register() for auto-registration.
     pub fn build_register_transaction(
         &self,
-        sender: SuiAddress,
+        sender: sui_sdk_types::Address,
         peer_id_bytes: Vec<u8>,
-        bond_coin: sui_sdk::types::base_types::ObjectRef,
-        gas_coin: sui_sdk::types::base_types::ObjectRef,
+        bond_coin: (sui_sdk_types::Address, u64, sui_sdk_types::Digest),
         gas_budget: u64,
-        gas_price: u64,
-    ) -> Result<sui_sdk::types::transaction::TransactionData, anyhow::Error> {
-        use sui_sdk::types::{
-            programmable_transaction_builder::ProgrammableTransactionBuilder,
-            transaction::{TransactionData, TransactionDataV1, ObjectArg, SharedObjectMutability},
-        };
+    ) -> sui_transaction_builder::TransactionBuilder {
+        let mut tx = sui_transaction_builder::TransactionBuilder::new();
 
-        let mut ptb = ProgrammableTransactionBuilder::new();
-
-        let bond_input = ptb.input(
-            sui_sdk::types::transaction::CallArg::Object(ObjectArg::ImmOrOwnedObject(
-                bond_coin,
-            )),
-        )
-        .map_err(|e| anyhow::anyhow!("ptb input error: {}", e))?;
-
-        let registry_input = ptb.input(
-            sui_sdk::types::transaction::CallArg::Object(ObjectArg::SharedObject {
-                id: self.registry_object_id,
-                initial_shared_version: sui_sdk::types::base_types::SequenceNumber::from_u64(self.registry_initial_shared_version),
-                mutability: SharedObjectMutability::Mutable,
-            }),
-        )
-        .map_err(|e| anyhow::anyhow!("ptb input error: {}", e))?;
-
-        let peer_id_input = ptb.pure(peer_id_bytes)
-            .map_err(|e| anyhow::anyhow!("ptb pure error: {}", e))?;
-
-        let module = sui_sdk::types::Identifier::new("staking")
-            .map_err(|e| anyhow::anyhow!("invalid module name: {}", e))?;
-        let function = sui_sdk::types::Identifier::new("register")
-            .map_err(|e| anyhow::anyhow!("invalid function name: {}", e))?;
-        ptb.command(sui_sdk::types::transaction::Command::move_call(
-            self.package_id,
-            module,
-            function,
-            vec![],
-            vec![registry_input, peer_id_input, bond_input],
+        let bond_input = tx.object(sui_transaction_builder::ObjectInput::owned(
+            bond_coin.0, bond_coin.1, bond_coin.2,
         ));
 
-        let pt = ptb.finish();
+        let registry_input = tx.object(sui_transaction_builder::ObjectInput::shared(
+            self.registry_object_id,
+            self.registry_initial_shared_version,
+            true,
+        ));
 
-        Ok(TransactionData::V1(TransactionDataV1 {
-            kind: sui_sdk::types::transaction::TransactionKind::ProgrammableTransaction(pt),
-            sender,
-            gas_data: sui_sdk::types::transaction::GasData {
-                payment: vec![gas_coin],
-                owner: sender,
-                price: gas_price,
-                budget: gas_budget,
-            },
-            expiration: sui_sdk::types::transaction::TransactionExpiration::None,
-        }))
+        let peer_id_input = tx.pure(&peer_id_bytes);
+
+        tx.move_call(
+            sui_transaction_builder::Function::new(
+                self.package_id,
+                sui_sdk_types::Identifier::from_static("staking"),
+                sui_sdk_types::Identifier::from_static("register"),
+            ),
+            vec![registry_input, peer_id_input, bond_input],
+        );
+
+        tx.set_sender(sender);
+        tx.set_gas_budget(gas_budget);
+        tx
     }
 }
