@@ -4,4 +4,5 @@ pub mod cache;
 pub mod client;
 pub mod sui;
 pub mod mesh;
+pub mod config;
 pub mod types;

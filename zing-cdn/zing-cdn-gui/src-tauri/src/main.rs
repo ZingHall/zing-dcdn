@@ -17,6 +17,8 @@ use zing_cdn_core::cache::pinning::PinningManager;
 use zing_cdn_core::cache::eviction::EvictionManager;
 use zing_cdn_core::p2p::node::ZingP2pNode;
 use zing_cdn_core::sui::wallet::ZingWallet;
+use zing_cdn_core::sui::settlement::SettlementConfig;
+use zing_cdn_core::config::ZingConfig;
 use zing_cdn_core::client::ZingClient;
 
 use crate::api_http::HttpApiState;
@@ -142,8 +144,31 @@ fn main() {
             let keystore_path: Option<std::path::PathBuf> = std::env::var("ZING_SUI_KEYSTORE")
                 .ok()
                 .map(std::path::PathBuf::from);
+
+            // Load settlement config from ~/.zing-cdn/config.toml
+            let config = ZingConfig::load();
+            let settlement_cfg = config.settlement.as_ref();
+            let settlement_config: Option<SettlementConfig> = settlement_cfg.and_then(|c| {
+                let package_id = c.package.as_ref()?.parse().ok()?;
+                let settlement_object_id = c.settlement_object.as_ref()?.parse().ok()?;
+                let vault_object_id = c.vault_object.as_ref().and_then(|v| v.parse().ok());
+                Some(SettlementConfig {
+                    package_id,
+                    settlement_object_id,
+                    registry_object_id: c.registry_object.as_ref()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or_else(|| "0x97b5153b9e9897ad1630cdd06e5caa81ebbf8865e96003f38e50c5f1d6752527".parse().unwrap()),
+                    vault_object_id,
+                    wal_coin_type: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL".into(),
+                    wal_package_id: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59".parse().unwrap(),
+                    registry_initial_shared_version: c.registry_version.unwrap_or(921074118),
+                    settlement_initial_shared_version: c.settlement_version.unwrap_or(921074118),
+                    vault_initial_shared_version: c.vault_version.unwrap_or(921074119),
+                })
+            });
+
             let wallet: Option<Arc<ZingWallet>> = {
-                match tauri::async_runtime::block_on(ZingWallet::from_keystore(keystore_path.as_deref(), None)) {
+                match tauri::async_runtime::block_on(ZingWallet::from_keystore(keystore_path.as_deref(), settlement_config.clone())) {
                     Ok(w) => {
                         tracing::info!(address = %w.address(), "Sui wallet loaded for WAL payments");
                         Some(Arc::new(w))
@@ -156,7 +181,30 @@ fn main() {
             };
             let sui_address_bytes = wallet.as_ref().map(|w| w.address().to_inner());
 
+            // Parse vault object ID for Kad DHT publishing
+            let vault_object_id_bytes: Option<[u8; 32]> = settlement_cfg
+                .and_then(|c| c.vault_object.as_ref())
+                .and_then(|v| {
+                    let hex_str = v.strip_prefix("0x").unwrap_or(v);
+                    if hex_str.len() != 64 { return None; }
+                    let mut bytes = [0u8; 32];
+                    for i in 0..32 {
+                        bytes[i] = u8::from_str_radix(&hex_str[i*2..i*2+2], 16).ok()?;
+                    }
+                    Some(bytes)
+                });
+
             tracing::info!("PeerId: {peer_id}");
+
+            // Auto-register peer if wallet + settlement config are set
+            if let Some(ref wallet) = wallet {
+                if wallet.settlement_config().is_some() {
+                    let pid_bytes = peer_id.to_bytes();
+                    if let Err(e) = tauri::async_runtime::block_on(wallet.register_peer(pid_bytes)) {
+                        tracing::warn!(%e, "Auto-registration failed — peer not registered on-chain");
+                    }
+                }
+            }
 
             let client = Arc::new(
                 tauri::async_runtime::block_on(ZingClient::from_mainnet())
@@ -226,7 +274,7 @@ fn main() {
             // Spawn P2P background task with loaded bootstrap peers
             tauri::async_runtime::spawn(async move {
                 let _ = ZingP2pNode::run(
-                    p2p_key, command_rx, store, listen_addr, bootstrap_addrs, external_addrs, sui_address_bytes, None,
+                    p2p_key, command_rx, store, listen_addr, bootstrap_addrs, external_addrs, sui_address_bytes, vault_object_id_bytes,
                 ).await;
             });
 

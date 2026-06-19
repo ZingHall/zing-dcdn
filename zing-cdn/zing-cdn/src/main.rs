@@ -10,9 +10,7 @@ use tracing_subscriber::EnvFilter;
 use walrus_core::metadata::BlobMetadataApi;
 use walrus_core::BlobId;
 
-mod config;
-use config::ZingConfig;
-
+use zing_cdn_core::config::ZingConfig;
 use zing_cdn_core::cache::eviction::EvictionManager;
 use zing_cdn_core::cache::pinning::PinningManager;
 use zing_cdn_core::cache::store::BlobStore;
