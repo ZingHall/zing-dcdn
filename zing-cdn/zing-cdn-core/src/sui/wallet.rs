@@ -417,6 +417,16 @@ impl ZingWallet {
 
         let peer_id_bytes = parse_peer_id_from_json(json)?;
 
+        let parse_debug = PeerId::from_bytes(&peer_id_bytes)
+            .map(|p| p.to_string())
+            .unwrap_or_else(|_| format!("raw({}b)", peer_id_bytes.len()));
+        tracing::info!(
+            peer_obj_id = %peer_object_id,
+            parsed_peer_id = %parse_debug,
+            bytes_len = peer_id_bytes.len(),
+            "get_registered_peer_info: parsed peer object"
+        );
+
         let initial_shared_version = object.owner
             .as_ref()
             .and_then(|o| o.version)
@@ -438,10 +448,23 @@ impl ZingWallet {
         let info = self.get_registered_peer_info().await?
             .ok_or_else(|| ZingError::SuiClient("not registered".into()))?;
 
+        let current_pid = PeerId::from_bytes(&new_peer_id_bytes)
+            .map(|p| p.to_string())
+            .unwrap_or_else(|_| format!("raw({}b)", new_peer_id_bytes.len()));
+        let onchain_pid = PeerId::from_bytes(&info.peer_id_bytes)
+            .map(|p| p.to_string())
+            .unwrap_or_else(|_| format!("raw({}b)", info.peer_id_bytes.len()));
+
+        tracing::info!(
+            "Checking peer ID: current={current_pid} onchain={onchain_pid} match={}",
+            info.peer_id_bytes == new_peer_id_bytes
+        );
+
         if info.peer_id_bytes == new_peer_id_bytes {
             tracing::info!("Peer ID already matches on-chain, skipping update");
             return Ok(());
         }
+        tracing::info!("Peer ID mismatch detected, updating on-chain");
 
         let mut client = sui_rpc::Client::new(&self.rpc_url)
             .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
