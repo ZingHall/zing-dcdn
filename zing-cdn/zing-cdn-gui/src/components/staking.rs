@@ -27,6 +27,8 @@ pub fn Staking() -> Element {
     };
     drop(my_info);
 
+    let my_wallet = my_peer_data.as_ref().map(|m| m.wallet_address.clone());
+
     {
         let mut peers = peers.clone();
         use_effect(move || {
@@ -94,9 +96,6 @@ pub fn Staking() -> Element {
                     p { b { "Active: " }
                         if my.is_active.unwrap_or(false) { "Yes" } else { "No" }
                     }
-                    p { b { "Live: " }
-                        if my.is_live.unwrap_or(false) { "Yes" } else { "No" }
-                    }
                     if my.needs_update {
                         p { style: "color: #e65100; font-size: 0.85rem; margin: 4px 0;",
                             "on-chain peer ID differs from current. Update to match."
@@ -155,9 +154,17 @@ pub fn Staking() -> Element {
                         }
                         tbody {
                             for p in &list {
-                                tr {
+                                let is_own = my_wallet.as_ref().map(|w| w == &p.sui_address).unwrap_or(false);
+                                let row_style = if is_own {
+                                    "background: #e8f4fd; font-weight: 500;"
+                                } else {
+                                    ""
+                                };
+                                tr { style: "{row_style}",
                                     td { style: "padding: 6px;",
-                                        if p.is_live {
+                                        if is_own {
+                                            span { style: "color: #1976d2;", "►" }
+                                        } else if p.is_live {
                                             span { style: "color: #4caf50;", "●" }
                                         } else if p.is_active {
                                             span { style: "color: #ff9800;", "●" }
@@ -175,10 +182,10 @@ pub fn Staking() -> Element {
                                         "{p.bond / 1_000_000_000}.{p.bond % 1_000_000_000:09}"
                                     }
                                     td { style: "padding: 6px; text-align: center;",
-                                        if p.is_active { "Yes" } else { "No" }
+                                        if is_own { "—" } else if p.is_active { "Yes" } else { "No" }
                                     }
                                     td { style: "padding: 6px; text-align: center;",
-                                        if p.is_live { "Yes" } else { "No" }
+                                        if is_own { "—" } else if p.is_live { "Yes" } else { "No" }
                                     }
                                 }
                             }
