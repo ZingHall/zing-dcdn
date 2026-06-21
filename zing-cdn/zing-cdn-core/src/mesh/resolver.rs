@@ -235,10 +235,9 @@ impl Resolver {
 
         for peer_id in &dht_peers {
             let (dial_reply, dial_rx) = tokio::sync::oneshot::channel();
-            if tx.send(P2pCommand::DialKadPeer { peer_id: *peer_id, addrs: None, reply: dial_reply }).await.is_ok() {
-                if dial_rx.await.unwrap_or(false) {
-                    tracing::info!(%peer_id, %blob_id_hex, "DHT auto-dial initiated via local address book");
-                }
+            if tx.send(P2pCommand::DialKadPeer { peer_id: *peer_id, addrs: None, reply: dial_reply }).await.is_ok()
+                && dial_rx.await.unwrap_or(false) {
+                tracing::info!(%peer_id, %blob_id_hex, "DHT auto-dial initiated via local address book");
             }
         }
 
@@ -248,10 +247,9 @@ impl Resolver {
                 if let Ok(Ok(addrs)) = tokio::time::timeout(Duration::from_secs(5), addr_rx).await {
                     if !addrs.is_empty() {
                         let (dial_reply, dial_rx) = tokio::sync::oneshot::channel();
-                        if tx.send(P2pCommand::DialKadPeer { peer_id: *peer_id, addrs: Some(addrs), reply: dial_reply }).await.is_ok() {
-                            if dial_rx.await.unwrap_or(false) {
-                                tracing::info!(%peer_id, %blob_id_hex, "DHT auto-dial initiated via peer address query");
-                            }
+                        if tx.send(P2pCommand::DialKadPeer { peer_id: *peer_id, addrs: Some(addrs), reply: dial_reply }).await.is_ok()
+                            && dial_rx.await.unwrap_or(false) {
+                            tracing::info!(%peer_id, %blob_id_hex, "DHT auto-dial initiated via peer address query");
                         }
                     } else {
                         tracing::debug!(%peer_id, %blob_id_hex, "addr query returned empty");

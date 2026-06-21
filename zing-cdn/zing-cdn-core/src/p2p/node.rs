@@ -97,6 +97,7 @@ impl ZingP2pNode {
         &self.command_tx
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn run(
         key: identity::Keypair,
         mut command_rx: mpsc::Receiver<P2pCommand>,
@@ -187,7 +188,7 @@ impl ZingP2pNode {
                         &mut pending_range_fetches,
                         &mut pending_sliver_fetches,
                         &mut pending_addr_queries,
-                        &mut peer_addresses,
+                        &peer_addresses,
                         &mut pending_announces,
                         &mut pending_sui_addr_queries,
                         &mut pending_vault_queries,
@@ -203,7 +204,7 @@ impl ZingP2pNode {
                             &mut pending_range_fetches,
                             &mut pending_sliver_fetches,
                             &mut pending_addr_queries,
-                            &mut peer_addresses,
+                        &mut peer_addresses,
                             &mut bootstrap_peers,
                             &mut bootstrap_done,
                             &mut pending_announces,
@@ -233,6 +234,7 @@ impl ZingP2pNode {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_command(
         swarm: &mut Swarm<ZingBehaviour>,
         cmd: P2pCommand,
@@ -347,14 +349,13 @@ impl ZingP2pNode {
             P2pCommand::QueryPeerAddress { target, reply } => {
                 let connected: Vec<PeerId> = swarm.connected_peers().copied().collect();
                 let mut reply_opt = Some(reply);
-                for peer_id in &connected {
+                if let Some(peer_id) = connected.first() {
                     let request = AddrRequest { peer_id: target };
                     let request_id = swarm
                         .behaviour_mut()
                         .addr
                         .send_request(peer_id, request);
                     pending_addr_queries.insert(request_id, reply_opt.take().unwrap());
-                    break;
                 }
                 if let Some(reply) = reply_opt {
                     let _ = reply.send(vec![]);
@@ -403,6 +404,7 @@ impl ZingP2pNode {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_swarm_event(
         swarm: &mut Swarm<ZingBehaviour>,
         event: SwarmEvent<ZingBehaviourEvent>,
@@ -502,7 +504,7 @@ impl ZingP2pNode {
                     }
                 }
                 if !pending_announces.is_empty() {
-                    let announces: Vec<[u8; 32]> = pending_announces.drain(..).collect();
+                    let announces = std::mem::take(pending_announces);
                     for bid in announces {
                         let key = kad::RecordKey::new(&bid);
                         if let Err(e) = swarm.behaviour_mut().kad.start_providing(key) {
@@ -529,6 +531,7 @@ impl ZingP2pNode {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn handle_behaviour_event(
         swarm: &mut Swarm<ZingBehaviour>,
         event: ZingBehaviourEvent,
@@ -840,21 +843,18 @@ impl ZingP2pNode {
                 }
             }
             ZingBehaviourEvent::Identify(identify_event) => {
-                match identify_event {
-                    libp2p::identify::Event::Received { peer_id, info, .. } => {
-                        if !info.listen_addrs.is_empty() {
-                            // Add the peer's actual listen addresses to the Kad routing table.
-                            // This gives the Kad DHT the real dialable addresses, superseding
-                            // the NAT-mapped send_back_addr (often an ephemeral source port)
-                            // that was added via ConnectionEstablished.
-                            for addr in &info.listen_addrs {
-                                swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
-                                tracing::debug!(%peer_id, %addr, "Kad routing table: added peer listen address from Identify");
-                            }
-                            peer_addresses.insert(peer_id, info.listen_addrs.clone());
+                if let libp2p::identify::Event::Received { peer_id, info, .. } = identify_event {
+                    if !info.listen_addrs.is_empty() {
+                        // Add the peer's actual listen addresses to the Kad routing table.
+                        // This gives the Kad DHT the real dialable addresses, superseding
+                        // the NAT-mapped send_back_addr (often an ephemeral source port)
+                        // that was added via ConnectionEstablished.
+                        for addr in &info.listen_addrs {
+                            swarm.behaviour_mut().kad.add_address(&peer_id, addr.clone());
+                            tracing::debug!(%peer_id, %addr, "Kad routing table: added peer listen address from Identify");
                         }
+                        peer_addresses.insert(peer_id, info.listen_addrs);
                     }
-                    _ => {}
                 }
             }
             ZingBehaviourEvent::Ping(ping_event) => {

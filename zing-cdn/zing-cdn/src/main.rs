@@ -399,6 +399,7 @@ fn format_size(bytes: u64) -> String {
 
 // ── Commands ──────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_get(
     cli: &Cli,
     blob_id_str: &str,
@@ -462,6 +463,7 @@ async fn cmd_get(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_cat(
     _cli: &Cli,
     blob_id_str: &str,

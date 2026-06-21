@@ -29,6 +29,20 @@ pub fn Staking() -> Element {
 
     let my_wallet = my_peer_data.as_ref().map(|m| m.wallet_address.clone());
 
+    struct PeerRow<'a> {
+        info: &'a ipc::StakingPeerInfo,
+        is_own: bool,
+        row_style: &'static str,
+    }
+    let rows: Vec<PeerRow> = list.iter().map(|p| {
+        let is_own = my_wallet.as_ref().map(|w| w == &p.sui_address).unwrap_or(false);
+        PeerRow {
+            info: p,
+            is_own,
+            row_style: if is_own { "background: #e8f4fd; font-weight: 500;" } else { "" },
+        }
+    }).collect();
+
     {
         let mut peers = peers.clone();
         use_effect(move || {
@@ -153,39 +167,33 @@ pub fn Staking() -> Element {
                             }
                         }
                         tbody {
-                            for p in &list {
-                                let is_own = my_wallet.as_ref().map(|w| w == &p.sui_address).unwrap_or(false);
-                                let row_style = if is_own {
-                                    "background: #e8f4fd; font-weight: 500;"
-                                } else {
-                                    ""
-                                };
-                                tr { style: "{row_style}",
+                            for r in &rows {
+                                tr { style: "{r.row_style}",
                                     td { style: "padding: 6px;",
-                                        if is_own {
+                                        if r.is_own {
                                             span { style: "color: #1976d2;", "►" }
-                                        } else if p.is_live {
+                                        } else if r.info.is_live {
                                             span { style: "color: #4caf50;", "●" }
-                                        } else if p.is_active {
+                                        } else if r.info.is_active {
                                             span { style: "color: #ff9800;", "●" }
                                         } else {
                                             span { style: "color: #999;", "●" }
                                         }
                                     }
-                                    td { style: "padding: 6px;", code { "{p.peer_id_short}" } }
+                                    td { style: "padding: 6px;", code { "{r.info.peer_id_short}" } }
                                     td { style: "padding: 6px;",
                                         code { style: "font-size: 0.8rem;",
-                                            "{&p.sui_address[..6]}...{&p.sui_address[p.sui_address.len() - 4..]}"
+                                            "{&r.info.sui_address[..6]}...{&r.info.sui_address[r.info.sui_address.len() - 4..]}"
                                         }
                                     }
                                     td { style: "padding: 6px; text-align: right;",
-                                        "{p.bond / 1_000_000_000}.{p.bond % 1_000_000_000:09}"
+                                        "{r.info.bond / 1_000_000_000}.{r.info.bond % 1_000_000_000:09}"
                                     }
                                     td { style: "padding: 6px; text-align: center;",
-                                        if is_own { "—" } else if p.is_active { "Yes" } else { "No" }
+                                        if r.is_own { "—" } else if r.info.is_active { "Yes" } else { "No" }
                                     }
                                     td { style: "padding: 6px; text-align: center;",
-                                        if is_own { "—" } else if p.is_live { "Yes" } else { "No" }
+                                        if r.is_own { "—" } else if r.info.is_live { "Yes" } else { "No" }
                                     }
                                 }
                             }

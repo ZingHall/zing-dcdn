@@ -523,8 +523,8 @@ impl ZingWallet {
         h.update(b"zing-payment-v1");
         h.update(recipient.to_string().as_bytes());
         h.update(blob_hash);
-        h.update(&amount.to_le_bytes());
-        h.update(&c.to_le_bytes());
+        h.update(amount.to_le_bytes());
+        h.update(c.to_le_bytes());
         let d: [u8; 32] = h.finalize().into();
         tracing::info!(?recipient, amount, counter = c, proof = %hex::encode(d),
             "WAL payment (synthetic proof)");

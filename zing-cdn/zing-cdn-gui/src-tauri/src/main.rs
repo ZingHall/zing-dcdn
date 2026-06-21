@@ -240,7 +240,7 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 let listener = tokio::net::TcpListener::bind(&bind_addr)
                     .await
-                    .expect(&format!("bind http api on {bind_addr}"));
+                    .unwrap_or_else(|_| panic!("bind http api on {bind_addr}"));
                 tracing::info!("HTTP API listening on {bind_addr}");
                 axum::serve(listener, app_router).await.ok();
             });
@@ -253,7 +253,7 @@ fn main() {
             });
 
             let window = app.get_webview_window("main").unwrap();
-            window.eval(&format!("window.ZING_API_PORT = {api_port};")).ok();
+            window.eval(format!("window.ZING_API_PORT = {api_port};")).ok();
             window.set_title(&format!("zing-cdn :{api_port}")).ok();
 
             Ok(())

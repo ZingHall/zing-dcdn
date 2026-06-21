@@ -48,7 +48,7 @@ impl libp2p::request_response::Codec for BinaryProtocolCodec {
         T: AsyncRead + Unpin + Send,
     {
         let len = read_u32_le(io).await? as usize;
-        if len > MAX_MESSAGE_SIZE || len < 65 {
+        if !(65..=MAX_MESSAGE_SIZE).contains(&len) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("invalid request length: {len}")));
         }
         let mut buf = vec![0u8; len];
@@ -65,7 +65,7 @@ impl libp2p::request_response::Codec for BinaryProtocolCodec {
         T: AsyncRead + Unpin + Send,
     {
         let len = read_u32_le(io).await? as usize;
-        if len > MAX_MESSAGE_SIZE || len < 1 {
+        if !(1..=MAX_MESSAGE_SIZE).contains(&len) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("invalid response length: {len}")));
         }
         let mut buf = vec![0u8; len];
@@ -188,7 +188,7 @@ impl libp2p::request_response::Codec for RangeProtocolCodec {
         T: AsyncRead + Unpin + Send,
     {
         let len = read_u32_le(io).await? as usize;
-        if len > MAX_MESSAGE_SIZE || len < 1 {
+        if !(1..=MAX_MESSAGE_SIZE).contains(&len) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("invalid response length: {len}")));
         }
         let mut buf = vec![0u8; len];
@@ -295,7 +295,7 @@ impl libp2p::request_response::Codec for SliverProtocolCodec {
         T: AsyncRead + Unpin + Send,
     {
         let len = read_u32_le(io).await? as usize;
-        if len > MAX_MESSAGE_SIZE || len < 1 {
+        if !(1..=MAX_MESSAGE_SIZE).contains(&len) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("invalid response length: {len}")));
         }
         let mut buf = vec![0u8; len];
@@ -379,7 +379,7 @@ impl libp2p::request_response::Codec for AddrProtocolCodec {
         T: AsyncRead + Unpin + Send,
     {
         let len = read_u32_le(io).await? as usize;
-        if len < 1 || len > 256 {
+        if !(1..=256).contains(&len) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("invalid addr request length: {len}")));
         }
         let mut buf = vec![0u8; len];
@@ -394,7 +394,7 @@ impl libp2p::request_response::Codec for AddrProtocolCodec {
         T: AsyncRead + Unpin + Send,
     {
         let len = read_u32_le(io).await? as usize;
-        if len > MAX_MESSAGE_SIZE || len < 1 {
+        if !(1..=MAX_MESSAGE_SIZE).contains(&len) {
             return Err(io::Error::new(io::ErrorKind::InvalidData, format!("invalid addr response length: {len}")));
         }
         let mut buf = vec![0u8; len];

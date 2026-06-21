@@ -15,7 +15,7 @@ pub type BlobStoreHandle = Arc<RwLock<BlobStore>>;
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn is_spot_check() -> bool {
-    REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed) % 10 == 0
+    REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed).is_multiple_of(10)
 }
 
 pub async fn handle_inbound_request(

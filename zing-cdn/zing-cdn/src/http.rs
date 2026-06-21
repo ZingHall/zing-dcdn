@@ -363,10 +363,9 @@ fn build_blobinfo(blob_id: &str, data: &[u8], source: &str, cached: bool, paymen
 }
 
 fn detect_mime(data: &[u8]) -> &'static str {
-    if data.starts_with(b"{") || data.starts_with(b"[") || data.starts_with(b"<") {
-        if String::from_utf8_lossy(data).chars().all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace()) {
-            return "application/json";
-        }
+    if (data.starts_with(b"{") || data.starts_with(b"[") || data.starts_with(b"<"))
+        && String::from_utf8_lossy(data).chars().all(|c| c.is_ascii_graphic() || c.is_ascii_whitespace()) {
+        return "application/json";
     }
     if data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) { "image/png" }
     else if data.starts_with(&[0xFF, 0xD8, 0xFF]) { "image/jpeg" }
@@ -397,7 +396,7 @@ pub async fn peers_add(state: &HttpApiState, addr_str: &str) -> Result<(), Strin
     use libp2p::multiaddr::Protocol;
 
     let addr: Multiaddr = addr_str.parse().map_err(|_| {
-        format!("invalid multiaddr — expected format: /ip4/<ip>/udp/<port>/quic-v1/p2p/<peer_id>")
+        "invalid multiaddr — expected format: /ip4/<ip>/udp/<port>/quic-v1/p2p/<peer_id>".to_string()
     })?;
     let mut peer_id = None;
     for proto in addr.iter() {

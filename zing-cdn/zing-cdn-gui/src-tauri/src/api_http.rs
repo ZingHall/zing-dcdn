@@ -319,7 +319,7 @@ pub async fn peers_add(state: &HttpApiState, addr_str: &str) -> Result<(), Strin
     use libp2p::multiaddr::Protocol;
 
     let addr: Multiaddr = addr_str.parse().map_err(|_| {
-        format!("invalid multiaddr — expected format: /ip4/<ip>/udp/<port>/quic-v1/p2p/<peer_id>")
+        "invalid multiaddr — expected format: /ip4/<ip>/udp/<port>/quic-v1/p2p/<peer_id>".to_string()
     })?;
     let mut peer_id = None;
     for proto in addr.iter() {
