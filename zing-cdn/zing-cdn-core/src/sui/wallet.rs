@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -8,7 +9,8 @@ use sha2::{Digest, Sha256};
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
 use sui_rpc::field::FieldMaskUtil;
-use sui_rpc::proto::sui::rpc::v2::{BatchGetObjectsRequest, GetObjectRequest, ListDynamicFieldsRequest};
+use sui_rpc::field::FieldMask;
+use sui_rpc::proto::sui::rpc::v2::{BatchGetObjectsRequest, GetObjectRequest, ListDynamicFieldsRequest, ListOwnedObjectsRequest};
 use sui_sdk_types::Address;
 
 use crate::types::{ZingError, ZingResult};
@@ -23,6 +25,27 @@ pub struct PeerInfo {
     pub peer_id_b58: String,
     pub bond: u64,
     pub is_active: bool,
+    pub peer_object_id: String,
+    pub vault: Option<PeerVaultInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PeerVaultInfo {
+    pub reserves: u64,
+    pub total_shares: u64,
+    pub commission_bps: u64,
+    pub peer_earnings: u64,
+    pub vault_object_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ShareCertificateInfo {
+    pub cert_object_id: String,
+    pub cert_version: u64,
+    pub vault_id: String,
+    pub vault_address: String,
+    pub shares: u64,
+    pub estimated_value: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -110,8 +133,11 @@ impl ZingWallet {
         let mut client = sui_rpc::Client::new(&self.rpc_url)
             .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
 
+        // Look up the recipient's vault to route payment to the correct vault
+        let vault_obj_id = self.get_vault_for_recipient(recipient).await?;
+
         // tx.coin() auto-selects + splits exact amount — no manual coin selection
-        let tx = settlement.build_pay_transaction(self.address, recipient, blob_hash, amount);
+        let tx = settlement.build_pay_transaction(self.address, recipient, blob_hash, amount, vault_obj_id);
 
         let transaction = tx.build(&mut client).await
             .map_err(|e| ZingError::SuiClient(format!("build: {}", e)))?;
@@ -310,17 +336,31 @@ impl ZingWallet {
         let results = response.into_inner().objects;
 
         let mut peers = Vec::new();
-        for result in results.into_iter() {
+        for (obj_id, result) in peer_object_ids.into_iter().zip(results) {
             if let Some(obj) = result.result.and_then(|r| match r {
                 sui_rpc::proto::sui::rpc::v2::get_object_result::Result::Object(o) => Some(o),
                 _ => None,
             }) {
                 if let Some(json) = &obj.json {
-                    if let Some(info) = parse_peer_json(json) {
+                    if let Some(info) = parse_peer_json(json, &obj_id) {
                         peers.push(info);
                     }
                 }
             }
+        }
+
+        // Attach vault info to matching peers
+        let vaults = self.list_peer_vaults().await.unwrap_or_default();
+        for peer in &mut peers {
+            let addr_normalized = peer.sui_address.trim_start_matches("0x").to_lowercase();
+            peer.vault = vaults.iter().find_map(|(vault_addr, vault_info)| {
+                let vault_addr_normalized = vault_addr.trim_start_matches("0x").to_lowercase();
+                if vault_addr_normalized == addr_normalized {
+                    Some(vault_info.clone())
+                } else {
+                    None
+                }
+            });
         }
 
         Ok(peers)
@@ -347,6 +387,401 @@ impl ZingWallet {
             .ok_or_else(|| ZingError::SuiClient("no balance in response".into()))?;
 
         Ok(balance.coin_balance.unwrap_or(0))
+    }
+
+    pub async fn list_peer_vaults(&self) -> ZingResult<HashMap<String, PeerVaultInfo>> {
+        let settlement = match &self.settlement {
+            Some(s) => s, None => return Ok(HashMap::new()),
+        };
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
+
+        let vaults_table_id = format!("0x{}", hex::encode(settlement.peer_vaults_table_id));
+
+        let request = ListDynamicFieldsRequest::const_default()
+            .with_parent(&vaults_table_id)
+            .with_read_mask(sui_rpc::field::FieldMask::from_paths(vec!["name", "value"]));
+
+        let stream = client.list_dynamic_fields(request);
+        let mut stream = std::pin::pin!(stream);
+
+        let mut addr_to_vault_id: Vec<(String, String)> = Vec::new();
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(df) => {
+                    let vault_id = if let Some(child_id) = &df.child_id {
+                        child_id.clone()
+                    } else if let Some(value_bcs) = &df.value {
+                        if let Some(value_bytes) = &value_bcs.value {
+                            format!("0x{}", hex::encode(value_bytes.as_ref()))
+                        } else { continue; }
+                    } else { continue; };
+
+                    let addr = if let Some(name_bcs) = &df.name {
+                        if let Some(name_bytes) = &name_bcs.value {
+                            let bytes = name_bytes.as_ref();
+                            if bytes.len() < 32 { continue; }
+                            format!("0x{}", hex::encode(&bytes[..32]))
+                        } else { continue; }
+                    } else { continue; };
+
+                    addr_to_vault_id.push((addr, vault_id));
+                }
+                Err(e) => {
+                    tracing::warn!(%e, "Failed to list dynamic fields from peer vaults table");
+                }
+            }
+        }
+
+        if addr_to_vault_id.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let requests: Vec<GetObjectRequest> = addr_to_vault_id
+            .iter()
+            .map(|(_, vault_id)| GetObjectRequest::const_default().with_object_id(vault_id))
+            .collect();
+
+        let response = client
+            .ledger_client()
+            .batch_get_objects(
+                BatchGetObjectsRequest::const_default()
+                    .with_requests(requests)
+                    .with_read_mask(sui_rpc::field::FieldMask::from_paths(vec!["json"])),
+            )
+            .await
+            .map_err(|e| ZingError::SuiClient(format!("batch_get_vaults: {}", e)))?;
+
+        let results = response.into_inner().objects;
+
+        let vaults: HashMap<String, PeerVaultInfo> = addr_to_vault_id
+            .into_iter()
+            .zip(results)
+            .filter_map(|((addr, vault_id), result)| {
+                let obj = result.result.and_then(|r| match r {
+                    sui_rpc::proto::sui::rpc::v2::get_object_result::Result::Object(o) => Some(o),
+                    _ => None,
+                })?;
+                let json = obj.json.as_ref()?;
+                let info = parse_vault_json(json, &vault_id)?;
+                Some((addr, info))
+            })
+            .collect();
+
+        Ok(vaults)
+    }
+
+    pub async fn get_my_vault_info(&self) -> ZingResult<Option<PeerVaultInfo>> {
+        let vaults = self.list_peer_vaults().await?;
+        let addr_str = format!("{:#}", self.address);
+        let addr_normalized = addr_str.trim_start_matches("0x").to_lowercase();
+        Ok(vaults.into_iter().find_map(|(k, v)| {
+            let k_normalized = k.trim_start_matches("0x").to_lowercase();
+            if k_normalized == addr_normalized { Some(v) } else { None }
+        }))
+    }
+
+    async fn get_vault_for_recipient(&self, recipient: Address) -> ZingResult<sui_sdk_types::Address> {
+        let recipient_hex = format!("0x{}", hex::encode(<[u8; 32]>::from(recipient)));
+        let vaults = self.list_peer_vaults().await?;
+        if let Some(vault_info) = vaults.get(&recipient_hex) {
+            return vault_info.vault_object_id.parse()
+                .map_err(|e| ZingError::SuiClient(format!("parse vault id: {}", e)));
+        }
+        let settlement = self.settlement.as_ref()
+            .ok_or_else(|| ZingError::SuiClient("settlement not configured".into()))?;
+        settlement.vault_object_id
+            .ok_or_else(|| ZingError::SuiClient("no vault_object_id in config".into()))
+    }
+
+    pub async fn create_vault(&self) -> ZingResult<()> {
+        let settlement = match &self.settlement {
+            Some(s) => s, None => return Err(ZingError::SuiClient("settlement not configured".into())),
+        };
+        let tx = settlement.build_create_vault_transaction(self.address)
+            .ok_or_else(|| ZingError::SuiClient("peer_vault_registry_id not set in config".into()))?;
+
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
+
+        let transaction = tx.build(&mut client).await
+            .map_err(|e| ZingError::SuiClient(format!("build create_vault: {}", e)))?;
+
+        let signature = self.keypair.sign_transaction(&transaction)
+            .map_err(|e| ZingError::SuiClient(format!("sign: {}", e)))?;
+
+        let request = sui_rpc::proto::sui::rpc::v2::ExecuteTransactionRequest::new(transaction.into())
+            .with_signatures(vec![signature.into()]);
+
+        let response = client
+            .execute_transaction_and_wait_for_checkpoint(request, Duration::from_secs(60))
+            .await
+            .map_err(|e| ZingError::SuiClient(format!("create_vault tx: {}", e)))?;
+
+        let digest = response.into_inner().transaction
+            .and_then(|t| t.digest).unwrap_or_default();
+        tracing::info!(tx_digest = %digest, "Vault created");
+        Ok(())
+    }
+
+    pub async fn list_my_share_certificates(&self) -> ZingResult<Vec<ShareCertificateInfo>> {
+        let settlement = match &self.settlement {
+            Some(s) => s,
+            None => return Ok(vec![]),
+        };
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
+
+        let owner = format!("{:#}", self.address);
+        let cert_type = &settlement.share_certificate_type;
+
+        // Pass 1: Get cert object IDs and versions via ListOwnedObjects
+        use futures::TryStreamExt;
+        let cert_ids: Vec<(String, u64)> = client
+            .list_owned_objects(
+                ListOwnedObjectsRequest::default()
+                    .with_owner(&owner)
+                    .with_object_type(cert_type.as_str())
+                    .with_read_mask(FieldMask {
+                        paths: vec!["object_id".into(), "version".into()],
+                    }),
+            )
+            .try_filter_map(|obj| async move {
+                Ok(Some((obj.object_id().to_string(), obj.version())))
+            })
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|e| ZingError::SuiClient(format!("list owned: {}", e)))?;
+
+        if cert_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Pass 2: Get JSON via batch_get_objects
+        let requests: Vec<GetObjectRequest> = cert_ids
+            .iter()
+            .map(|(id, _)| GetObjectRequest::const_default().with_object_id(id))
+            .collect();
+
+        let response = client
+            .ledger_client()
+            .batch_get_objects(
+                BatchGetObjectsRequest::const_default()
+                    .with_requests(requests)
+                    .with_read_mask(sui_rpc::field::FieldMask::from_paths(vec!["json"])),
+            )
+            .await
+            .map_err(|e| ZingError::SuiClient(format!("batch_get_certs: {}", e)))?;
+
+        let results = response.into_inner().objects;
+
+        // Parse each cert
+        let certs: Vec<(String, u64, String, u64)> = cert_ids
+            .into_iter()
+            .zip(results)
+            .filter_map(|((object_id, version), result)| {
+                let obj = result.result.and_then(|r| match r {
+                    sui_rpc::proto::sui::rpc::v2::get_object_result::Result::Object(o) => Some(o),
+                    _ => None,
+                })?;
+                let json = obj.json.as_ref()?;
+                let prost_types::value::Kind::StructValue(s) = json.kind.as_ref()? else { return None };
+                let vault_id = s.fields.get("vault_id")
+                    .and_then(|v| v.kind.as_ref())
+                    .and_then(|k| match k { prost_types::value::Kind::StringValue(v) => Some(v.clone()), _ => None })?;
+                let shares_str = s.fields.get("shares")
+                    .and_then(|v| v.kind.as_ref())
+                    .and_then(|k| match k { prost_types::value::Kind::StringValue(v) => Some(v.clone()), _ => None })?;
+                let shares: u64 = shares_str.parse().ok()?;
+                Some((object_id, version, vault_id, shares))
+            })
+            .collect();
+
+        // Fetch vault info to map vault_id → peer address and compute estimated value
+        let vaults = self.list_peer_vaults().await.unwrap_or_default();
+        let vault_id_to_info: std::collections::HashMap<String, (String, PeerVaultInfo)> = vaults
+            .into_iter()
+            .map(|(addr, info)| (info.vault_object_id.clone(), (addr, info)))
+            .collect();
+
+        let result = certs
+            .into_iter()
+            .map(|(cert_object_id, cert_version, vault_id, shares)| {
+                let vault_data = vault_id_to_info.get(&vault_id);
+                let vault_address = vault_data.map(|(addr, _)| addr.clone()).unwrap_or_default();
+                let estimated_value = vault_data.map(|(_, info)| {
+                    if info.total_shares > 0 {
+                        let product = (shares as u128).saturating_mul(info.reserves as u128);
+                        (product / (info.total_shares as u128).max(1)) as u64
+                    } else { 0 }
+                }).unwrap_or(0);
+                ShareCertificateInfo {
+                    cert_object_id,
+                    cert_version,
+                    vault_id,
+                    vault_address,
+                    shares,
+                    estimated_value,
+                }
+            })
+            .collect();
+
+        Ok(result)
+    }
+
+    pub async fn claim_earnings(&self) -> ZingResult<()> {
+        let settlement = match &self.settlement {
+            Some(s) => s,
+            None => return Err(ZingError::SuiClient("settlement not configured".into())),
+        };
+
+        let vault_info = self.get_my_vault_info().await?
+            .ok_or_else(|| ZingError::SuiClient("no vault created".into()))?;
+
+        let vault_obj_id: sui_sdk_types::Address = vault_info.vault_object_id
+            .parse()
+            .map_err(|e| ZingError::SuiClient(format!("parse vault id: {}", e)))?;
+
+        let tx = settlement.build_claim_earnings_transaction(
+            self.address,
+            vault_obj_id,
+            settlement.vault_initial_shared_version,
+        );
+
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
+
+        let transaction = tx.build(&mut client).await
+            .map_err(|e| ZingError::SuiClient(format!("build claim_earnings: {}", e)))?;
+
+        let signature = self.keypair.sign_transaction(&transaction)
+            .map_err(|e| ZingError::SuiClient(format!("sign: {}", e)))?;
+
+        let request = sui_rpc::proto::sui::rpc::v2::ExecuteTransactionRequest::new(transaction.into())
+            .with_signatures(vec![signature.into()]);
+
+        let response = client
+            .execute_transaction_and_wait_for_checkpoint(request, Duration::from_secs(60))
+            .await
+            .map_err(|e| ZingError::SuiClient(format!("claim_earnings tx: {}", e)))?;
+
+        let digest = response.into_inner().transaction
+            .and_then(|t| t.digest).unwrap_or_default();
+        tracing::info!(tx_digest = %digest, "Claim earnings executed");
+        Ok(())
+    }
+
+    pub async fn delegate(&self, vault_object_id: &str, amount_frost: u64) -> ZingResult<()> {
+        let settlement = match &self.settlement {
+            Some(s) => s,
+            None => return Err(ZingError::SuiClient("settlement not configured".into())),
+        };
+
+        let vault_obj_id: sui_sdk_types::Address = vault_object_id.parse()
+            .map_err(|e| ZingError::SuiClient(format!("parse vault id: {}", e)))?;
+
+        let tx = settlement.build_delegate_transaction(
+            self.address,
+            vault_obj_id,
+            settlement.vault_initial_shared_version,
+            amount_frost,
+        );
+
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
+
+        let transaction = tx.build(&mut client).await
+            .map_err(|e| ZingError::SuiClient(format!("build delegate: {}", e)))?;
+
+        let signature = self.keypair.sign_transaction(&transaction)
+            .map_err(|e| ZingError::SuiClient(format!("sign: {}", e)))?;
+
+        let request = sui_rpc::proto::sui::rpc::v2::ExecuteTransactionRequest::new(transaction.into())
+            .with_signatures(vec![signature.into()]);
+
+        let response = client
+            .execute_transaction_and_wait_for_checkpoint(request, Duration::from_secs(60))
+            .await
+            .map_err(|e| ZingError::SuiClient(format!("delegate tx: {}", e)))?;
+
+        let digest = response.into_inner().transaction
+            .and_then(|t| t.digest).unwrap_or_default();
+        tracing::info!(tx_digest = %digest, vault = %vault_object_id, amount = amount_frost, "Delegate executed");
+        Ok(())
+    }
+
+    pub async fn undelegate(&self, cert_object_id: &str) -> ZingResult<()> {
+        let settlement = match &self.settlement {
+            Some(s) => s,
+            None => return Err(ZingError::SuiClient("settlement not configured".into())),
+        };
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
+
+        // Fetch the cert object to get vault_id and current version
+        let response = client.ledger_client().get_object(
+            GetObjectRequest::const_default()
+                .with_object_id(cert_object_id)
+                .with_read_mask(sui_rpc::field::FieldMask::from_paths(vec!["json", "version", "digest"])),
+        ).await
+        .map_err(|e| ZingError::SuiClient(format!("get cert: {}", e)))?;
+
+        let obj = response.into_inner().object
+            .ok_or_else(|| ZingError::SuiClient("cert object not found".into()))?;
+
+        let cert_version = obj.version
+            .ok_or_else(|| ZingError::SuiClient("cert has no version".into()))?;
+
+        let cert_digest: sui_sdk_types::Digest = obj.digest
+            .ok_or_else(|| ZingError::SuiClient("cert has no digest".into()))?
+            .parse()
+            .map_err(|e| ZingError::SuiClient(format!("parse cert digest: {}", e)))?;
+
+        let json = obj.json.as_ref()
+            .ok_or_else(|| ZingError::SuiClient("cert has no json".into()))?;
+
+        let vault_id = {
+            let prost_types::value::Kind::StructValue(s) = json.kind.as_ref()
+                .ok_or_else(|| ZingError::SuiClient("cert json not a struct".into()))? else { unreachable!() };
+            s.fields.get("vault_id")
+                .and_then(|v| v.kind.as_ref())
+                .and_then(|k| match k { prost_types::value::Kind::StringValue(v) => Some(v.clone()), _ => None })
+                .ok_or_else(|| ZingError::SuiClient("missing vault_id in cert".into()))?
+        };
+
+        let vault_obj_id: sui_sdk_types::Address = vault_id.parse()
+            .map_err(|e| ZingError::SuiClient(format!("parse vault id: {}", e)))?;
+        let cert_obj_id: sui_sdk_types::Address = cert_object_id.parse()
+            .map_err(|e| ZingError::SuiClient(format!("parse cert id: {}", e)))?;
+
+        let tx = settlement.build_undelegate_transaction(
+            self.address,
+            vault_obj_id,
+            settlement.vault_initial_shared_version,
+            cert_obj_id,
+            cert_version,
+            cert_digest,
+        );
+
+        let transaction = tx.build(&mut client).await
+            .map_err(|e| ZingError::SuiClient(format!("build undelegate: {}", e)))?;
+
+        let signature = self.keypair.sign_transaction(&transaction)
+            .map_err(|e| ZingError::SuiClient(format!("sign: {}", e)))?;
+
+        let request = sui_rpc::proto::sui::rpc::v2::ExecuteTransactionRequest::new(transaction.into())
+            .with_signatures(vec![signature.into()]);
+
+        let response = client
+            .execute_transaction_and_wait_for_checkpoint(request, Duration::from_secs(60))
+            .await
+            .map_err(|e| ZingError::SuiClient(format!("undelegate tx: {}", e)))?;
+
+        let digest = response.into_inner().transaction
+            .and_then(|t| t.digest).unwrap_or_default();
+        tracing::info!(tx_digest = %digest, cert = %cert_object_id, "Undelegate executed");
+        Ok(())
     }
 
     pub fn settlement_config(&self) -> Option<&SettlementConfig> { self.settlement.as_ref() }
@@ -609,7 +1044,45 @@ fn parse_peer_id_from_json(json: &prost_types::Value) -> ZingResult<Vec<u8>> {
     ).map_err(|e| ZingError::SuiClient(format!("decode peer_id: {}", e)))
 }
 
-fn parse_peer_json(json: &prost_types::Value) -> Option<PeerInfo> {
+fn parse_vault_json(json: &prost_types::Value, vault_object_id: &str) -> Option<PeerVaultInfo> {
+    let prost_types::value::Kind::StructValue(s) = json.kind.as_ref()? else { return None; };
+
+    let reserves_str = s.fields.get("reserves")
+        .and_then(|v| v.kind.as_ref())
+        .and_then(|k| match k {
+            prost_types::value::Kind::StringValue(s) => Some(s.clone()),
+            _ => None,
+        })?;
+    let reserves: u64 = reserves_str.parse().ok()?;
+
+    let total_shares_str = s.fields.get("total_shares")
+        .and_then(|v| v.kind.as_ref())
+        .and_then(|k| match k {
+            prost_types::value::Kind::StringValue(s) => Some(s.clone()),
+            _ => None,
+        })?;
+    let total_shares: u64 = total_shares_str.parse().ok()?;
+
+    let commission_bps_str = s.fields.get("commission_bps")
+        .and_then(|v| v.kind.as_ref())
+        .and_then(|k| match k {
+            prost_types::value::Kind::StringValue(s) => Some(s.clone()),
+            _ => None,
+        })?;
+    let commission_bps: u64 = commission_bps_str.parse().ok()?;
+
+    let peer_earnings_str = s.fields.get("peer_earnings")
+        .and_then(|v| v.kind.as_ref())
+        .and_then(|k| match k {
+            prost_types::value::Kind::StringValue(s) => Some(s.clone()),
+            _ => None,
+        })?;
+    let peer_earnings: u64 = peer_earnings_str.parse().ok()?;
+
+    Some(PeerVaultInfo { reserves, total_shares, commission_bps, peer_earnings, vault_object_id: vault_object_id.to_string() })
+}
+
+fn parse_peer_json(json: &prost_types::Value, obj_id: &str) -> Option<PeerInfo> {
     let prost_types::value::Kind::StructValue(s) = json.kind.as_ref()? else { return None; };
 
     let peer_id_b64 = s.fields.get("peer_id")
@@ -647,7 +1120,7 @@ fn parse_peer_json(json: &prost_types::Value) -> Option<PeerInfo> {
             _ => None,
         })?;
 
-    Some(PeerInfo { sui_address, peer_id_b58, bond, is_active })
+    Some(PeerInfo { sui_address, peer_id_b58, bond, is_active, peer_object_id: obj_id.to_string(), vault: None })
 }
 
 #[cfg(test)]

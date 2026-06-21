@@ -172,13 +172,19 @@ pub async fn remove_peer(addr: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(serde::Deserialize, Clone)]
+#[derive(serde::Deserialize, Clone, PartialEq)]
 pub struct StakingPeerInfo {
     pub sui_address: String,
     pub peer_id_short: String,
+    pub peer_object_id: String,
     pub bond: u64,
     pub is_active: bool,
     pub is_live: bool,
+    pub vault_reserves: Option<u64>,
+    pub vault_total_shares: Option<u64>,
+    pub vault_commission_bps: Option<u64>,
+    pub vault_peer_earnings: Option<u64>,
+    pub vault_object_id: Option<String>,
 }
 
 pub async fn list_staking() -> Result<Vec<StakingPeerInfo>, String> {
@@ -201,6 +207,7 @@ pub async fn list_staking() -> Result<Vec<StakingPeerInfo>, String> {
 #[derive(serde::Deserialize, Clone)]
 pub struct MyPeerInfo {
     pub wallet_address: String,
+    pub peer_object_id: String,
     pub peer_id_short: Option<String>,
     pub bond: Option<u64>,
     pub is_active: Option<bool>,
@@ -251,6 +258,134 @@ pub async fn get_wal_balance() -> Result<WalBalance, String> {
 
 pub async fn register_peer() -> Result<String, String> {
     let url = format!("{}/api/register", base_url());
+    log(&format!("POST {url}"));
+    let response = Request::post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    let raw = response.text().await.map_err(|e| format!("http error: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("json error: {e}"))?;
+    if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(msg.to_string());
+    }
+    value.get("message")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "No message in response".to_string())
+}
+
+#[derive(serde::Deserialize, Clone)]
+pub struct MyVaultInfo {
+    pub has_vault: bool,
+    pub reserves: Option<u64>,
+    pub total_shares: Option<u64>,
+    pub commission_bps: Option<u64>,
+    pub peer_earnings: Option<u64>,
+    pub vault_object_id: Option<String>,
+}
+
+pub async fn get_my_vault_info() -> Result<MyVaultInfo, String> {
+    let url = format!("{}/api/my_vault", base_url());
+    log(&format!("GET {url}"));
+    let response = Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    let raw = response.text().await.map_err(|e| format!("http error: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("json error: {e}"))?;
+    if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(msg.to_string());
+    }
+    serde_json::from_value::<MyVaultInfo>(value)
+        .map_err(|e| format!("json error: {e}"))
+}
+
+pub async fn create_vault() -> Result<String, String> {
+    let url = format!("{}/api/create_vault", base_url());
+    log(&format!("POST {url}"));
+    let response = Request::post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    let raw = response.text().await.map_err(|e| format!("http error: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("json error: {e}"))?;
+    if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(msg.to_string());
+    }
+    value.get("message")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "No message in response".to_string())
+}
+
+#[derive(serde::Deserialize, Clone, PartialEq)]
+pub struct ShareCertificateInfo {
+    pub cert_object_id: String,
+    pub vault_address: String,
+    pub shares: u64,
+    pub estimated_value: u64,
+}
+
+pub async fn list_my_shares() -> Result<Vec<ShareCertificateInfo>, String> {
+    let url = format!("{}/api/my_shares", base_url());
+    log(&format!("GET {url}"));
+    let response = Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    let raw = response.text().await.map_err(|e| format!("http error: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("json error: {e}"))?;
+    if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(msg.to_string());
+    }
+    serde_json::from_value::<Vec<ShareCertificateInfo>>(value)
+        .map_err(|e| format!("json error: {e}"))
+}
+
+pub async fn claim_earnings() -> Result<String, String> {
+    let url = format!("{}/api/claim_earnings", base_url());
+    log(&format!("POST {url}"));
+    let response = Request::post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    let raw = response.text().await.map_err(|e| format!("http error: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("json error: {e}"))?;
+    if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(msg.to_string());
+    }
+    value.get("message")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "No message in response".to_string())
+}
+
+pub async fn delegate(vault_object_id: &str, amount: &str) -> Result<String, String> {
+    let url = format!("{}/api/delegate?vault_object_id={}&amount={}", base_url(), vault_object_id, amount);
+    log(&format!("POST {url}"));
+    let response = Request::post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    let raw = response.text().await.map_err(|e| format!("http error: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("json error: {e}"))?;
+    if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(msg.to_string());
+    }
+    value.get("message")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "No message in response".to_string())
+}
+
+pub async fn undelegate(cert_object_id: &str) -> Result<String, String> {
+    let url = format!("{}/api/undelegate?cert_object_id={}", base_url(), cert_object_id);
     log(&format!("POST {url}"));
     let response = Request::post(&url)
         .send()

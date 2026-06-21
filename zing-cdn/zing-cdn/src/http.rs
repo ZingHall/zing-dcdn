@@ -77,14 +77,21 @@ pub struct CacheEntry {
 pub struct StakingPeerInfo {
     pub sui_address: String,
     pub peer_id_short: String,
+    pub peer_object_id: String,
     pub bond: u64,
     pub is_active: bool,
     pub is_live: bool,
+    pub vault_reserves: Option<u64>,
+    pub vault_total_shares: Option<u64>,
+    pub vault_commission_bps: Option<u64>,
+    pub vault_peer_earnings: Option<u64>,
+    pub vault_object_id: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct MyPeerInfo {
     pub wallet_address: String,
+    pub peer_object_id: String,
     pub peer_id_short: Option<String>,
     pub bond: Option<u64>,
     pub is_active: Option<bool>,
@@ -102,6 +109,24 @@ pub struct WalBalance {
 pub struct RegisterResult {
     pub success: bool,
     pub message: String,
+}
+
+#[derive(Serialize)]
+pub struct ShareCertificateInfo {
+    pub cert_object_id: String,
+    pub vault_address: String,
+    pub shares: u64,
+    pub estimated_value: u64,
+}
+
+#[derive(Serialize)]
+pub struct MyVaultInfo {
+    pub has_vault: bool,
+    pub reserves: Option<u64>,
+    pub total_shares: Option<u64>,
+    pub commission_bps: Option<u64>,
+    pub peer_earnings: Option<u64>,
+    pub vault_object_id: Option<String>,
 }
 
 pub async fn handle_resolve(
@@ -200,6 +225,12 @@ pub fn build_router(state: HttpApiState) -> axum::Router {
         .route("/api/v1/balance", axum::routing::get(handle_balance))
         .route("/api/v1/register", axum::routing::post(handle_register))
         .route("/api/v1/update_peer_id", axum::routing::post(handle_update_peer_id))
+        .route("/api/v1/my_vault", axum::routing::get(handle_my_vault))
+        .route("/api/v1/create_vault", axum::routing::post(handle_create_vault))
+        .route("/api/v1/my_shares", axum::routing::get(handle_my_shares))
+        .route("/api/v1/claim_earnings", axum::routing::post(handle_claim_earnings))
+        .route("/api/v1/delegate", axum::routing::post(handle_delegate))
+        .route("/api/v1/undelegate", axum::routing::post(handle_undelegate))
         .layer(cors)
         .with_state(state)
 }
@@ -459,12 +490,21 @@ pub async fn handle_staking(
         } else {
             p.peer_id_b58.clone()
         };
+        let (vault_reserves, vault_total_shares, vault_commission_bps, vault_peer_earnings, vault_object_id) = p.vault
+            .map(|v| (Some(v.reserves), Some(v.total_shares), Some(v.commission_bps), Some(v.peer_earnings), Some(v.vault_object_id)))
+            .unwrap_or((None, None, None, None, None));
         StakingPeerInfo {
             sui_address: p.sui_address,
             peer_id_short: short,
+            peer_object_id: p.peer_object_id,
             bond: p.bond,
             is_active: p.is_active,
             is_live,
+            vault_reserves,
+            vault_total_shares,
+            vault_commission_bps,
+            vault_peer_earnings,
+            vault_object_id,
         }
     }).collect();
 
@@ -503,6 +543,7 @@ pub async fn handle_my_peer(
             };
             MyPeerInfo {
                 wallet_address,
+                peer_object_id: p.peer_object_id,
                 peer_id_short: Some(short),
                 bond: Some(p.bond),
                 is_active: Some(p.is_active),
@@ -512,6 +553,7 @@ pub async fn handle_my_peer(
         }
         None => MyPeerInfo {
             wallet_address,
+            peer_object_id: String::new(),
             peer_id_short: None,
             bond: None,
             is_active: None,
@@ -568,5 +610,155 @@ pub async fn handle_update_peer_id(
     Ok(axum::Json(RegisterResult {
         success: true,
         message: "Peer ID updated successfully".into(),
+    }))
+}
+
+pub async fn handle_my_vault(
+    axum::extract::State(state): axum::extract::State<HttpApiState>,
+) -> Result<axum::Json<MyVaultInfo>, (axum::http::StatusCode, String)> {
+    let wallet = state.wallet.as_ref()
+        .ok_or_else(|| (axum::http::StatusCode::BAD_REQUEST, "Wallet not configured".into()))?;
+
+    let vault = wallet.get_my_vault_info().await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    match vault {
+        Some(v) => Ok(axum::Json(MyVaultInfo {
+            has_vault: true,
+            reserves: Some(v.reserves),
+            total_shares: Some(v.total_shares),
+            commission_bps: Some(v.commission_bps),
+            peer_earnings: Some(v.peer_earnings),
+            vault_object_id: Some(v.vault_object_id),
+        })),
+        None => Ok(axum::Json(MyVaultInfo {
+            has_vault: false,
+            reserves: None,
+            total_shares: None,
+            commission_bps: None,
+            peer_earnings: None,
+            vault_object_id: None,
+        })),
+    }
+}
+
+pub async fn handle_create_vault(
+    axum::extract::State(state): axum::extract::State<HttpApiState>,
+) -> Result<axum::Json<RegisterResult>, (axum::http::StatusCode, String)> {
+    let wallet = state.wallet.as_ref()
+        .ok_or_else(|| (axum::http::StatusCode::BAD_REQUEST, "Wallet not configured".into()))?;
+
+    wallet.create_vault().await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(axum::Json(RegisterResult {
+        success: true,
+        message: "Vault created successfully".into(),
+    }))
+}
+
+pub async fn handle_my_shares(
+    axum::extract::State(state): axum::extract::State<HttpApiState>,
+) -> Result<axum::Json<Vec<ShareCertificateInfo>>, (axum::http::StatusCode, String)> {
+    let wallet = state.wallet.as_ref()
+        .ok_or_else(|| (axum::http::StatusCode::BAD_REQUEST, "Wallet not configured".into()))?;
+
+    let certs = wallet.list_my_share_certificates().await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let result: Vec<ShareCertificateInfo> = certs.into_iter().map(|c| {
+        let addr_short = if c.vault_address.len() > 16 {
+            format!("{}...{}", &c.vault_address[..10], &c.vault_address[c.vault_address.len().saturating_sub(4)..])
+        } else {
+            c.vault_address.clone()
+        };
+        ShareCertificateInfo {
+            cert_object_id: c.cert_object_id,
+            vault_address: addr_short,
+            shares: c.shares,
+            estimated_value: c.estimated_value,
+        }
+    }).collect();
+
+    Ok(axum::Json(result))
+}
+
+pub async fn handle_claim_earnings(
+    axum::extract::State(state): axum::extract::State<HttpApiState>,
+) -> Result<axum::Json<RegisterResult>, (axum::http::StatusCode, String)> {
+    let wallet = state.wallet.as_ref()
+        .ok_or_else(|| (axum::http::StatusCode::BAD_REQUEST, "Wallet not configured".into()))?;
+
+    wallet.claim_earnings().await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(axum::Json(RegisterResult {
+        success: true,
+        message: "Earnings claimed successfully".into(),
+    }))
+}
+
+#[derive(Deserialize)]
+pub struct CertObjectIdQuery {
+    pub cert_object_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct DelegateQuery {
+    pub vault_object_id: String,
+    pub amount: String,
+}
+
+fn parse_wal_amount(s: &str) -> Result<u64, String> {
+    let parts: Vec<&str> = s.split('.').collect();
+    match parts.len() {
+        1 => parts[0].parse::<u64>().map(|n| n.saturating_mul(1_000_000_000)).map_err(|e| e.to_string()),
+        2 => {
+            let integer = parts[0].parse::<u64>().map_err(|e| e.to_string())?;
+            let frac = parts[1];
+            if frac.len() > 9 {
+                return Err("too many decimal places (max 9)".into());
+            }
+            let frac_padded = format!("{:0<9}", frac);
+            let fractional = frac_padded.parse::<u64>().map_err(|e| e.to_string())?;
+            integer.saturating_mul(1_000_000_000).checked_add(fractional)
+                .ok_or_else(|| "amount overflow".into())
+        }
+        _ => Err("invalid amount format".into()),
+    }
+}
+
+pub async fn handle_delegate(
+    axum::extract::State(state): axum::extract::State<HttpApiState>,
+    axum::extract::Query(q): axum::extract::Query<DelegateQuery>,
+) -> Result<axum::Json<RegisterResult>, (axum::http::StatusCode, String)> {
+    let wallet = state.wallet.as_ref()
+        .ok_or_else(|| (axum::http::StatusCode::BAD_REQUEST, "Wallet not configured".into()))?;
+
+    let amount_frost = parse_wal_amount(&q.amount)
+        .map_err(|e| (axum::http::StatusCode::BAD_REQUEST, e))?;
+
+    wallet.delegate(&q.vault_object_id, amount_frost).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(axum::Json(RegisterResult {
+        success: true,
+        message: "Delegated successfully".into(),
+    }))
+}
+
+pub async fn handle_undelegate(
+    axum::extract::State(state): axum::extract::State<HttpApiState>,
+    axum::extract::Query(q): axum::extract::Query<CertObjectIdQuery>,
+) -> Result<axum::Json<RegisterResult>, (axum::http::StatusCode, String)> {
+    let wallet = state.wallet.as_ref()
+        .ok_or_else(|| (axum::http::StatusCode::BAD_REQUEST, "Wallet not configured".into()))?;
+
+    wallet.undelegate(&q.cert_object_id).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(axum::Json(RegisterResult {
+        success: true,
+        message: "Undelegated successfully".into(),
     }))
 }

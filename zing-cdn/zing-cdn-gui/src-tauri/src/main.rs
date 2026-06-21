@@ -124,6 +124,17 @@ fn main() {
                 let package_id = c.package.as_ref()?.parse().ok()?;
                 let settlement_object_id = c.settlement_object.as_ref()?.parse().ok()?;
                 let vault_object_id = c.vault_object.as_ref().and_then(|v| v.parse().ok());
+                let peer_vaults_table_str = c.peer_vaults_table.as_deref()
+                    .unwrap_or("0x465bf3e99dff79a56705b111396ee5b9bd35f2a1aac70d118f466a7c581e0e07");
+                let peer_vaults_table_stripped = peer_vaults_table_str.strip_prefix("0x").unwrap_or(peer_vaults_table_str);
+                let mut peer_vaults_table_id = [0u8; 32];
+                if peer_vaults_table_stripped.len() == 64 {
+                    for i in 0..32 {
+                        peer_vaults_table_id[i] = u8::from_str_radix(&peer_vaults_table_stripped[i*2..i*2+2], 16).unwrap_or(0);
+                    }
+                }
+                let peer_vault_registry_id = c.peer_vault_registry.as_ref()
+                    .and_then(|v| v.parse().ok());
                 Some(SettlementConfig {
                     package_id,
                     settlement_object_id,
@@ -133,12 +144,17 @@ fn main() {
                     registry_peers_table_id: c.registry_peers_table.as_ref()
                         .and_then(|v| v.parse().ok())
                         .unwrap_or_else(|| "0xbcd17d4df8489569fdca7bc9a795c16a73560efbde2355d91ef9195bf676ea00".parse().unwrap()),
+                    peer_vaults_table_id,
+                    peer_vault_registry_id,
                     vault_object_id,
                     wal_coin_type: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL".into(),
                     wal_package_id: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59".parse().unwrap(),
                     registry_initial_shared_version: c.registry_version.unwrap_or(921074118),
                     settlement_initial_shared_version: c.settlement_version.unwrap_or(921074118),
                     vault_initial_shared_version: c.vault_version.unwrap_or(921074119),
+                    peer_vaults_initial_shared_version: c.peer_vaults_version.unwrap_or(923306507),
+                    peer_vault_registry_initial_shared_version: c.peer_vault_registry_version.unwrap_or(923306507),
+                    share_certificate_type: "0x9dd1a5dc551e322dd1b0394514ece30eb1e5f54d5de5b1f6fe135ebe24032b9c::peer_vault::ShareCertificate".into(),
                 })
             });
 
@@ -230,6 +246,12 @@ fn main() {
                 .route("/api/balance", routing::get(handle_balance))
                 .route("/api/register", routing::post(handle_register))
                 .route("/api/update_peer_id", routing::post(handle_update_peer_id))
+                .route("/api/my_vault", routing::get(handle_my_vault))
+                .route("/api/create_vault", routing::post(handle_create_vault))
+                .route("/api/my_shares", routing::get(handle_my_shares))
+                .route("/api/claim_earnings", routing::post(handle_claim_earnings))
+                .route("/api/delegate", routing::post(handle_delegate))
+                .route("/api/undelegate", routing::post(handle_undelegate))
                 .layer(cors)
                 .with_state(api_state);
 
@@ -401,5 +423,47 @@ async fn handle_update_peer_id(State(state): State<HttpApiState>) -> Json<serde_
     match wallet.update_peer_id(peer_id_bytes).await {
         Ok(()) => Json(serde_json::json!({"success": true, "message": "Peer ID updated successfully"})),
         Err(e) => Json(serde_json::json!({"error": e.to_string()})),
+    }
+}
+
+async fn handle_my_vault(State(state): State<HttpApiState>) -> Json<serde_json::Value> {
+    match api_http::get_my_vault(&state).await {
+        Ok(info) => Json(serde_json::to_value(info).unwrap()),
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_create_vault(State(state): State<HttpApiState>) -> Json<serde_json::Value> {
+    match api_http::create_vault(&state).await {
+        Ok(result) => Json(serde_json::to_value(result).unwrap()),
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_my_shares(State(state): State<HttpApiState>) -> Json<serde_json::Value> {
+    match api_http::list_my_shares(&state).await {
+        Ok(result) => Json(serde_json::to_value(result).unwrap()),
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_claim_earnings(State(state): State<HttpApiState>) -> Json<serde_json::Value> {
+    match api_http::claim_earnings(&state).await {
+        Ok(result) => Json(serde_json::to_value(result).unwrap()),
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_delegate(State(state): State<HttpApiState>, axum::extract::Query(q): axum::extract::Query<api_http::DelegateQuery>) -> Json<serde_json::Value> {
+    match api_http::delegate(&state, &q.vault_object_id, &q.amount).await {
+        Ok(result) => Json(serde_json::to_value(result).unwrap()),
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_undelegate(State(state): State<HttpApiState>, axum::extract::Query(q): axum::extract::Query<api_http::CertObjectIdQuery>) -> Json<serde_json::Value> {
+    match api_http::undelegate(&state, &q.cert_object_id).await {
+        Ok(result) => Json(serde_json::to_value(result).unwrap()),
+        Err(e) => Json(serde_json::json!({"error": e})),
     }
 }

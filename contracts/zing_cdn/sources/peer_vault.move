@@ -21,7 +21,7 @@ module zing_cdn::peer_vault {
 
     public struct PeerVaultRegistry has key, store {
         id: UID,
-        peer_vaults: Table<address, ID>, // sui_address → Peer object ID
+        peer_vaults: Table<address, ID>, // sui_address → PeerVault object ID
     }
 
     /// A per-peer vault. Created once by a peer to accept delegated WAL

@@ -153,6 +153,8 @@ async fn main() -> anyhow::Result<()> {
     let registry_ver = settlement_cfg.and_then(|c| c.registry_version).unwrap_or(921074118);
     let settlement_ver = settlement_cfg.and_then(|c| c.settlement_version).unwrap_or(921074118);
     let vault_ver = settlement_cfg.and_then(|c| c.vault_version).unwrap_or(921074119);
+    let peer_vaults_ver = settlement_cfg.and_then(|c| c.peer_vaults_version).unwrap_or(923306507);
+    let peer_vault_registry_ver = settlement_cfg.and_then(|c| c.peer_vault_registry_version).unwrap_or(923306507);
 
     let settlement_config: Option<SettlementConfig> = match (settlement_package, settlement_object) {
         (Some(pkg), Some(obj)) => {
@@ -170,6 +172,22 @@ async fn main() -> anyhow::Result<()> {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or_else(|| "0xbcd17d4df8489569fdca7bc9a795c16a73560efbde2355d91ef9195bf676ea00"
                     .parse().expect("hardcoded registry_peers_table_id"));
+            let peer_vaults_table_str = config.settlement
+                .as_ref()
+                .and_then(|s| s.peer_vaults_table.as_ref())
+                .map(|s| s.as_str())
+                .unwrap_or("0x465bf3e99dff79a56705b111396ee5b9bd35f2a1aac70d118f466a7c581e0e07");
+            let peer_vaults_table_stripped = peer_vaults_table_str.strip_prefix("0x").unwrap_or(peer_vaults_table_str);
+            let mut peer_vaults_table_id = [0u8; 32];
+            if peer_vaults_table_stripped.len() == 64 {
+                for i in 0..32 {
+                    peer_vaults_table_id[i] = u8::from_str_radix(&peer_vaults_table_stripped[i*2..i*2+2], 16).unwrap_or(0);
+                }
+            }
+            let peer_vault_registry_id = config.settlement
+                .as_ref()
+                .and_then(|s| s.peer_vault_registry.as_ref())
+                .and_then(|v| v.parse().ok());
             let wal_package_id = "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59"
                 .parse()
                 .ok();
@@ -180,12 +198,17 @@ async fn main() -> anyhow::Result<()> {
                         settlement_object_id,
                         registry_object_id,
                         registry_peers_table_id,
+                        peer_vaults_table_id,
+                        peer_vault_registry_id,
                         vault_object_id,
                         wal_coin_type: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL".into(),
                         wal_package_id,
                         registry_initial_shared_version: registry_ver,
                         settlement_initial_shared_version: settlement_ver,
                         vault_initial_shared_version: vault_ver,
+                        peer_vaults_initial_shared_version: peer_vaults_ver,
+                        peer_vault_registry_initial_shared_version: peer_vault_registry_ver,
+                        share_certificate_type: "0x9dd1a5dc551e322dd1b0394514ece30eb1e5f54d5de5b1f6fe135ebe24032b9c::peer_vault::ShareCertificate".into(),
                     }
                 ),
                 _ => None,

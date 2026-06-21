@@ -15,9 +15,13 @@ pub struct SettlementSection {
     pub vault_object: Option<String>,
     pub registry_object: Option<String>,
     pub registry_peers_table: Option<String>,
+    pub peer_vaults_table: Option<String>,
+    pub peer_vault_registry: Option<String>,
     pub registry_version: Option<u64>,
     pub settlement_version: Option<u64>,
     pub vault_version: Option<u64>,
+    pub peer_vaults_version: Option<u64>,
+    pub peer_vault_registry_version: Option<u64>,
 }
 
 impl ZingConfig {

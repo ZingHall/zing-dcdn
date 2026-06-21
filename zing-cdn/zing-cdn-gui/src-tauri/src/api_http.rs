@@ -3,7 +3,7 @@ use std::time::Duration;
 use std::convert::Infallible;
 use tokio::sync::{RwLock, mpsc, oneshot};
 use libp2p::{PeerId, Multiaddr};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use axum::response::sse::Event;
 
 use zing_cdn_core::cache::store::BlobStore;
@@ -382,9 +382,15 @@ pub async fn peers_remove(state: &HttpApiState, addr_str: &str) -> Result<(), St
 pub struct StakingPeerInfo {
     pub sui_address: String,
     pub peer_id_short: String,
+    pub peer_object_id: String,
     pub bond: u64,
     pub is_active: bool,
     pub is_live: bool,
+    pub vault_reserves: Option<u64>,
+    pub vault_total_shares: Option<u64>,
+    pub vault_commission_bps: Option<u64>,
+    pub vault_peer_earnings: Option<u64>,
+    pub vault_object_id: Option<String>,
 }
 
 pub async fn list_staking(state: &HttpApiState) -> Result<Vec<StakingPeerInfo>, String> {
@@ -408,12 +414,21 @@ pub async fn list_staking(state: &HttpApiState) -> Result<Vec<StakingPeerInfo>, 
         } else {
             p.peer_id_b58.clone()
         };
+        let (vault_reserves, vault_total_shares, vault_commission_bps, vault_peer_earnings, vault_object_id) = p.vault
+            .map(|v| (Some(v.reserves), Some(v.total_shares), Some(v.commission_bps), Some(v.peer_earnings), Some(v.vault_object_id)))
+            .unwrap_or((None, None, None, None, None));
         StakingPeerInfo {
             sui_address: p.sui_address,
             peer_id_short: short,
+            peer_object_id: p.peer_object_id,
             bond: p.bond,
             is_active: p.is_active,
             is_live,
+            vault_reserves,
+            vault_total_shares,
+            vault_commission_bps,
+            vault_peer_earnings,
+            vault_object_id,
         }
     }).collect())
 }
@@ -421,6 +436,7 @@ pub async fn list_staking(state: &HttpApiState) -> Result<Vec<StakingPeerInfo>, 
 #[derive(Serialize)]
 pub struct MyPeerInfo {
     pub wallet_address: String,
+    pub peer_object_id: String,
     pub peer_id_short: Option<String>,
     pub bond: Option<u64>,
     pub is_active: Option<bool>,
@@ -462,6 +478,7 @@ pub async fn get_my_peer_info(state: &HttpApiState) -> Result<MyPeerInfo, String
             };
             Ok(MyPeerInfo {
                 wallet_address,
+                peer_object_id: p.peer_object_id,
                 peer_id_short: Some(short),
                 bond: Some(p.bond),
                 is_active: Some(p.is_active),
@@ -472,6 +489,7 @@ pub async fn get_my_peer_info(state: &HttpApiState) -> Result<MyPeerInfo, String
         }
         None => Ok(MyPeerInfo {
             wallet_address,
+            peer_object_id: String::new(),
             peer_id_short: None,
             bond: None,
             is_active: None,
@@ -506,6 +524,69 @@ pub struct RegisterResult {
     pub message: String,
 }
 
+#[derive(Deserialize)]
+pub struct CertObjectIdQuery {
+    pub cert_object_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct DelegateQuery {
+    pub vault_object_id: String,
+    pub amount: String,
+}
+
+fn parse_wal_amount(s: &str) -> Result<u64, String> {
+    let parts: Vec<&str> = s.split('.').collect();
+    match parts.len() {
+        1 => parts[0].parse::<u64>().map(|n| n.saturating_mul(1_000_000_000)).map_err(|e| e.to_string()),
+        2 => {
+            let integer = parts[0].parse::<u64>().map_err(|e| e.to_string())?;
+            let frac = parts[1];
+            if frac.len() > 9 {
+                return Err("too many decimal places (max 9)".into());
+            }
+            let frac_padded = format!("{:0<9}", frac);
+            let fractional = frac_padded.parse::<u64>().map_err(|e| e.to_string())?;
+            integer.saturating_mul(1_000_000_000).checked_add(fractional)
+                .ok_or_else(|| "amount overflow".into())
+        }
+        _ => Err("invalid amount format".into()),
+    }
+}
+
+pub async fn delegate(state: &HttpApiState, vault_object_id: &str, amount: &str) -> Result<RegisterResult, String> {
+    let wallet = state.wallet.as_ref()
+        .ok_or("Wallet not configured")?;
+
+    let amount_frost = parse_wal_amount(amount)?;
+
+    wallet.delegate(vault_object_id, amount_frost).await
+        .map_err(|e| e.to_string())?;
+
+    Ok(RegisterResult {
+        success: true,
+        message: "Delegated successfully".to_string(),
+    })
+}
+
+#[derive(Serialize)]
+pub struct ShareCertificateInfo {
+    pub cert_object_id: String,
+    pub vault_address: String,
+    pub shares: u64,
+    pub estimated_value: u64,
+}
+
+#[derive(Serialize)]
+pub struct MyVaultInfo {
+    pub has_vault: bool,
+    pub reserves: Option<u64>,
+    pub total_shares: Option<u64>,
+    pub commission_bps: Option<u64>,
+    pub peer_earnings: Option<u64>,
+    pub vault_object_id: Option<String>,
+}
+
 pub async fn register_peer(state: &HttpApiState) -> Result<RegisterResult, String> {
     let wallet = state.wallet.as_ref()
         .ok_or("Wallet not configured")?;
@@ -518,5 +599,95 @@ pub async fn register_peer(state: &HttpApiState) -> Result<RegisterResult, Strin
     Ok(RegisterResult {
         success: true,
         message: "Peer registered successfully".to_string(),
+    })
+}
+
+pub async fn get_my_vault(state: &HttpApiState) -> Result<MyVaultInfo, String> {
+    let wallet = state.wallet.as_ref()
+        .ok_or("Wallet not configured")?;
+
+    let vault = wallet.get_my_vault_info().await
+        .map_err(|e| e.to_string())?;
+
+    match vault {
+        Some(v) => Ok(MyVaultInfo {
+            has_vault: true,
+            reserves: Some(v.reserves),
+            total_shares: Some(v.total_shares),
+            commission_bps: Some(v.commission_bps),
+            peer_earnings: Some(v.peer_earnings),
+            vault_object_id: Some(v.vault_object_id),
+        }),
+        None => Ok(MyVaultInfo {
+            has_vault: false,
+            reserves: None,
+            total_shares: None,
+            commission_bps: None,
+            peer_earnings: None,
+            vault_object_id: None,
+        }),
+    }
+}
+
+pub async fn create_vault(state: &HttpApiState) -> Result<RegisterResult, String> {
+    let wallet = state.wallet.as_ref()
+        .ok_or("Wallet not configured")?;
+
+    wallet.create_vault().await
+        .map_err(|e| e.to_string())?;
+
+    Ok(RegisterResult {
+        success: true,
+        message: "Vault created successfully".to_string(),
+    })
+}
+
+pub async fn list_my_shares(state: &HttpApiState) -> Result<Vec<ShareCertificateInfo>, String> {
+    let wallet = state.wallet.as_ref()
+        .ok_or("Wallet not configured")?;
+
+    let certs = wallet.list_my_share_certificates().await
+        .map_err(|e| e.to_string())?;
+
+    let result: Vec<ShareCertificateInfo> = certs.into_iter().map(|c| {
+        let addr_short = if c.vault_address.len() > 16 {
+            format!("{}...{}", &c.vault_address[..10], &c.vault_address[c.vault_address.len().saturating_sub(4)..])
+        } else {
+            c.vault_address.clone()
+        };
+        ShareCertificateInfo {
+            cert_object_id: c.cert_object_id,
+            vault_address: addr_short,
+            shares: c.shares,
+            estimated_value: c.estimated_value,
+        }
+    }).collect();
+
+    Ok(result)
+}
+
+pub async fn claim_earnings(state: &HttpApiState) -> Result<RegisterResult, String> {
+    let wallet = state.wallet.as_ref()
+        .ok_or("Wallet not configured")?;
+
+    wallet.claim_earnings().await
+        .map_err(|e| e.to_string())?;
+
+    Ok(RegisterResult {
+        success: true,
+        message: "Earnings claimed successfully".to_string(),
+    })
+}
+
+pub async fn undelegate(state: &HttpApiState, cert_object_id: &str) -> Result<RegisterResult, String> {
+    let wallet = state.wallet.as_ref()
+        .ok_or("Wallet not configured")?;
+
+    wallet.undelegate(cert_object_id).await
+        .map_err(|e| e.to_string())?;
+
+    Ok(RegisterResult {
+        success: true,
+        message: "Undelegated successfully".to_string(),
     })
 }
