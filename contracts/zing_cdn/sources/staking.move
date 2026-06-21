@@ -69,6 +69,16 @@ public fun register_for_testing(
 }
 
 #[test_only]
+public fun update_peer_id_for_testing(
+    registry: &Registry,
+    peer: &mut Peer,
+    new_peer_id: vector<u8>,
+    ctx: &mut TxContext,
+) {
+    update_peer_id(registry, peer, new_peer_id, ctx);
+}
+
+#[test_only]
 public fun slash_for_testing(
     cap: &AdminCap,
     peer: &mut Peer,
@@ -107,6 +117,27 @@ public fun register(
     event::emit(RegisterEvent {
         peer: sender,
         peer_id,
+    });
+}
+
+/// Update the peer_id of an existing registered peer.
+/// Called when a peer rotates their libp2p keypair (wallet-derived PeerId
+/// changes if the wallet keypair changes).
+public fun update_peer_id(
+    _registry: &Registry,
+    peer: &mut Peer,
+    new_peer_id: vector<u8>,
+    ctx: &mut TxContext,
+) {
+    assert!(ctx.sender() == peer.sui_address, EB_NOT_PEER_OWNER);
+
+    let old_peer_id = peer.peer_id;
+    peer.peer_id = new_peer_id;
+
+    event::emit(PeerIdUpdatedEvent {
+        peer: peer.sui_address,
+        old_peer_id,
+        new_peer_id,
     });
 }
 
@@ -224,6 +255,12 @@ public struct UnstakeEvent has copy, drop {
 public struct SlashEvent has copy, drop {
     peer: address,
     amount: u64,
+}
+
+public struct PeerIdUpdatedEvent has copy, drop {
+    peer: address,
+    old_peer_id: vector<u8>,
+    new_peer_id: vector<u8>,
 }
 
 // ===== Error codes =====
