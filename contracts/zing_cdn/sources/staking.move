@@ -14,7 +14,7 @@ use sui::table::{Self, Table};
 
 /// Minimum self-stake bond to register as a peer (in frost, 9 decimals).
 /// 1000 WAL = 1_000_000_000_000 frost.
-const MIN_STAKE: u64 = 1_000_000_000_000;
+const MIN_STAKE: u64 = 1_000_000_000;
 
 // ===== Shared objects =====
 

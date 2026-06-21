@@ -4,3 +4,5 @@ edition = "2024.beta"
 
 [dependencies]
 wal = { local = "../../../walrus/contracts/wal" }
+# walrus = { local = "../../../main/walrus/contracts/walrus/" }
+walrus = { local = "../../../walrus/contracts/walrus/" }
