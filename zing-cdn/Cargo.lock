@@ -761,6 +761,8 @@ dependencies = [
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
+ "hyper 1.8.1",
+ "hyper-util",
  "itoa",
  "matchit 0.7.3",
  "memchr",
@@ -769,10 +771,15 @@ dependencies = [
  "pin-project-lite",
  "rustversion",
  "serde",
+ "serde_json",
+ "serde_path_to_error",
+ "serde_urlencoded",
  "sync_wrapper",
+ "tokio",
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -831,6 +838,7 @@ dependencies = [
  "sync_wrapper",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -15530,13 +15538,17 @@ name = "zing-cdn"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum 0.7.9",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "libp2p",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
  "toml 0.8.23",
+ "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
  "walrus-core",
@@ -15558,6 +15570,7 @@ dependencies = [
  "hex",
  "libp2p",
  "lru 0.12.5",
+ "prost-types 0.14.1",
  "rocksdb",
  "serde",
  "serde_bytes",

@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 use crate::ipc;
+use crate::components::toast::{add_toast, ToastLevel};
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
@@ -14,6 +15,7 @@ struct BlobInfo {
     content: String,
     mime_type: String,
     data_base64: String,
+    payment_error: Option<String>,
 }
 
 #[component]
@@ -99,6 +101,9 @@ pub fn BlobBrowser() -> Element {
                                     }
                                     "result" => {
                                         if let Ok(blob_info) = serde_json::from_value::<BlobInfo>(v["info"].clone()) {
+                                            if let Some(ref perr) = blob_info.payment_error {
+                                                add_toast(&format!("Payment failed: {perr}"), ToastLevel::Error);
+                                            }
                                             info.set(Some(blob_info));
                                         }
                                         loading.set(false);

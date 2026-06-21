@@ -2,22 +2,28 @@ mod ipc;
 mod components;
 
 use dioxus::prelude::*;
+use crate::components::toast::{Toast, ToastContainer};
 
 #[derive(PartialEq, Clone)]
 enum Tab {
     Dashboard,
     BlobBrowser,
     Cache,
+    Staking,
     Settings,
 }
 
 #[component]
 pub fn App() -> Element {
     let mut tab = use_signal(|| Tab::Dashboard);
+    let toasts = use_signal(|| Vec::<Toast>::new());
+
+    use_context_provider(|| toasts);
 
     use crate::components::dashboard::Dashboard;
     use crate::components::blob::BlobBrowser;
     use crate::components::cache::Cache;
+    use crate::components::staking::Staking;
     use crate::components::settings::Settings;
 
     rsx! {
@@ -41,6 +47,11 @@ pub fn App() -> Element {
                     "Cache"
                 }
                 button {
+                    onclick: move |_| tab.set(Tab::Staking),
+                    style: if tab() == Tab::Staking { "font-weight: bold" } else { "" },
+                    "Staking"
+                }
+                button {
                     onclick: move |_| tab.set(Tab::Settings),
                     style: if tab() == Tab::Settings { "font-weight: bold" } else { "" },
                     "⚙"
@@ -51,9 +62,11 @@ pub fn App() -> Element {
                     Tab::Dashboard => rsx! { Dashboard {} },
                     Tab::BlobBrowser => rsx! { BlobBrowser {} },
                     Tab::Cache => rsx! { Cache {} },
+                    Tab::Staking => rsx! { Staking {} },
                     Tab::Settings => rsx! { Settings {} },
                 }
             }
+            ToastContainer {}
         }
     }
 }

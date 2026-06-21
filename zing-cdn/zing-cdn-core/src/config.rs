@@ -14,6 +14,7 @@ pub struct SettlementSection {
     pub settlement_object: Option<String>,
     pub vault_object: Option<String>,
     pub registry_object: Option<String>,
+    pub registry_peers_table: Option<String>,
     pub registry_version: Option<u64>,
     pub settlement_version: Option<u64>,
     pub vault_version: Option<u64>,

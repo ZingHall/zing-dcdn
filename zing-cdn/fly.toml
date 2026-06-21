@@ -11,6 +11,13 @@ primary_region = "iad"
   [[services.ports]]
     port = 34291
 
+[[services]]
+  protocol = "tcp"
+  internal_port = 8080
+
+  [[services.ports]]
+    port = 8080
+
 [mounts]
   source = "zing_cdn_data"
   destination = "/data"

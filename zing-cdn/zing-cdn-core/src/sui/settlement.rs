@@ -4,6 +4,7 @@ pub struct SettlementConfig {
     pub package_id: sui_sdk_types::Address,
     pub settlement_object_id: sui_sdk_types::Address,
     pub registry_object_id: sui_sdk_types::Address,
+    pub registry_peers_table_id: sui_sdk_types::Address,
     pub vault_object_id: Option<sui_sdk_types::Address>,
     pub wal_coin_type: String,
     pub wal_package_id: sui_sdk_types::Address,
@@ -21,6 +22,8 @@ impl SettlementConfig {
                 .parse().expect("invalid settlement_object_id"),
             registry_object_id: "0x97b5153b9e9897ad1630cdd06e5caa81ebbf8865e96003f38e50c5f1d6752527"
                 .parse().expect("invalid registry_object_id"),
+            registry_peers_table_id: "0xbcd17d4df8489569fdca7bc9a795c16a73560efbde2355d91ef9195bf676ea00"
+                .parse().expect("invalid registry_peers_table_id"),
             vault_object_id: Some(vault_object_id),
             wal_coin_type: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL".into(),
             wal_package_id: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59"

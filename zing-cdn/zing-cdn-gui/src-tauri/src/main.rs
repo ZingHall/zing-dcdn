@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tauri::Manager;
-use libp2p::{Multiaddr, identity};
+use libp2p::Multiaddr;
 use tracing_subscriber::EnvFilter;
 use axum::{routing, Json, extract::{State, Query}, response::sse::{Event, Sse}};
 use serde::Deserialize;
@@ -26,28 +26,6 @@ use crate::api_http::HttpApiState;
 const CACHE_BUDGET: u64 = 500 * 1024 * 1024;
 
 const DEFAULT_BOOTSTRAP: &[&str] = &[];
-
-fn load_or_generate_keypair(cache_dir: &Path) -> identity::Keypair {
-    let path = cache_dir.join("keypair");
-    if let Ok(data) = std::fs::read(&path) {
-        if let Ok(kp) = identity::Keypair::from_protobuf_encoding(&data) {
-            return kp;
-        }
-    }
-    let kp = identity::Keypair::generate_ed25519();
-    let data = kp.to_protobuf_encoding().expect("serialize keypair");
-    if std::fs::OpenOptions::new().write(true).create_new(true).open(&path)
-        .and_then(|mut f| std::io::Write::write_all(&mut f, &data))
-        .is_err()
-    {
-        if let Ok(data) = std::fs::read(&path) {
-            if let Ok(kp) = identity::Keypair::from_protobuf_encoding(&data) {
-                return kp;
-            }
-        }
-    }
-    kp
-}
 
 fn load_peers(cache_dir: &Path) -> Vec<String> {
     let path = cache_dir.join("peers.json");
@@ -135,12 +113,6 @@ fn main() {
                 BlobStore::open(&cache_dir).expect("open blob store"),
             ));
 
-            let keypair = load_or_generate_keypair(&cache_dir);
-            let (p2p_node, command_rx) = ZingP2pNode::new(store.clone(), keypair);
-            let p2p_tx = p2p_node.command_tx().clone();
-            let p2p_key = p2p_node.key().clone();
-            let peer_id = p2p_node.local_peer_id();
-
             let keystore_path: Option<std::path::PathBuf> = std::env::var("ZING_SUI_KEYSTORE")
                 .ok()
                 .map(std::path::PathBuf::from);
@@ -158,6 +130,9 @@ fn main() {
                     registry_object_id: c.registry_object.as_ref()
                         .and_then(|v| v.parse().ok())
                         .unwrap_or_else(|| "0x97b5153b9e9897ad1630cdd06e5caa81ebbf8865e96003f38e50c5f1d6752527".parse().unwrap()),
+                    registry_peers_table_id: c.registry_peers_table.as_ref()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or_else(|| "0xbcd17d4df8489569fdca7bc9a795c16a73560efbde2355d91ef9195bf676ea00".parse().unwrap()),
                     vault_object_id,
                     wal_coin_type: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL".into(),
                     wal_package_id: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59".parse().unwrap(),
@@ -167,23 +142,23 @@ fn main() {
                 })
             });
 
-            let wallet: Option<Arc<ZingWallet>> = {
-                match tauri::async_runtime::block_on(ZingWallet::from_keystore(keystore_path.as_deref(), settlement_config.clone())) {
-                    Ok(w) => {
-                        tracing::info!(address = %w.address(), "Sui wallet loaded for WAL payments");
-                        Some(Arc::new(w))
-                    }
-                    Err(e) => {
-                        tracing::warn!(%e, "Sui wallet not available — running without WAL payments");
-                        None
-                    }
-                }
-            };
-            let sui_address_bytes = wallet.as_ref().map(|w| {
-                let addr = w.address();
+            let wallet = Arc::new(
+                tauri::async_runtime::block_on(ZingWallet::from_keystore(keystore_path.as_deref(), settlement_config.clone()))
+                    .expect("Sui wallet required for GUI"),
+            );
+            tracing::info!(address = %wallet.address(), "Sui wallet loaded for WAL payments");
+            let sui_address_bytes: Option<[u8; 32]> = {
+                let addr = wallet.address();
                 let bytes: [u8; 32] = addr.into();
-                bytes
-            });
+                Some(bytes)
+            };
+
+            let keypair = wallet.to_libp2p_keypair();
+            let (p2p_node, command_rx) = ZingP2pNode::new(store.clone(), keypair);
+            let p2p_tx = p2p_node.command_tx().clone();
+            let p2p_key = p2p_node.key().clone();
+            let peer_id = p2p_node.local_peer_id();
+            tracing::info!(%peer_id, "P2P keypair derived from wallet");
 
             // Parse vault object ID for Kad DHT publishing
             let vault_object_id_bytes: Option<[u8; 32]> = settlement_cfg
@@ -199,16 +174,6 @@ fn main() {
                 });
 
             tracing::info!("PeerId: {peer_id}");
-
-            // Auto-register peer if wallet + settlement config are set
-            if let Some(ref wallet) = wallet {
-                if wallet.settlement_config().is_some() {
-                    let pid_bytes = peer_id.to_bytes();
-                    if let Err(e) = tauri::async_runtime::block_on(wallet.register_peer(pid_bytes)) {
-                        tracing::warn!(%e, "Auto-registration failed — peer not registered on-chain");
-                    }
-                }
-            }
 
             let client = Arc::new(
                 tauri::async_runtime::block_on(ZingClient::from_mainnet())
@@ -244,7 +209,7 @@ fn main() {
                 cache_dir: cache_dir.clone(),
                 p2p_port,
                 client,
-                wallet: wallet.clone(),
+                wallet: Some(wallet.clone()),
             };
 
             // Build axum router with CORS (localhost app — permissive)
@@ -260,6 +225,10 @@ fn main() {
                 .route("/api/peers", routing::get(handle_peers_list))
                 .route("/api/peers/add", routing::post(handle_peers_add))
                 .route("/api/peers/remove", routing::post(handle_peers_remove))
+                .route("/api/staking", routing::get(handle_staking))
+                .route("/api/my_peer", routing::get(handle_my_peer))
+                .route("/api/balance", routing::get(handle_balance))
+                .route("/api/register", routing::post(handle_register))
                 .layer(cors)
                 .with_state(api_state);
 
@@ -390,6 +359,34 @@ async fn handle_peers_remove(
             save_peers(&peers, &state.cache_dir);
             Json(serde_json::json!({"ok": true}))
         }
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_staking(State(state): State<HttpApiState>) -> Json<serde_json::Value> {
+    match api_http::list_staking(&state).await {
+        Ok(peers) => Json(serde_json::to_value(peers).unwrap()),
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_my_peer(State(state): State<HttpApiState>) -> Json<serde_json::Value> {
+    match api_http::get_my_peer_info(&state).await {
+        Ok(info) => Json(serde_json::to_value(info).unwrap()),
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_balance(State(state): State<HttpApiState>) -> Json<serde_json::Value> {
+    match api_http::get_wal_balance(&state).await {
+        Ok(info) => Json(serde_json::to_value(info).unwrap()),
+        Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_register(State(state): State<HttpApiState>) -> Json<serde_json::Value> {
+    match api_http::register_peer(&state).await {
+        Ok(result) => Json(serde_json::to_value(result).unwrap()),
         Err(e) => Json(serde_json::json!({"error": e})),
     }
 }

@@ -41,6 +41,7 @@ pub struct ResolveResult {
     pub data: Vec<u8>,
     pub resolution: BlobResolution,
     pub cached: bool,
+    pub payment_error: Option<String>,
 }
 
 impl Resolver {
@@ -82,10 +83,10 @@ impl Resolver {
         tx: &mpsc::Sender<P2pCommand>,
         blob_hash: &[u8; 32],
         amount_nanos: u64,
-    ) -> [u8; 32] {
+    ) -> ([u8; 32], Option<String>) {
         let wallet = match &self.wallet {
             Some(w) => w,
-            None => return [0u8; 32],
+            None => return ([0u8; 32], None),
         };
 
         let cached = {
@@ -98,22 +99,26 @@ impl Resolver {
                     Ok(a) => a,
                     Err(e) => {
                         tracing::warn!(?addr, %e, "Invalid Sui address in cache");
-                        return [0u8; 32];
+                        return ([0u8; 32], Some(format!("Invalid Sui address: {e}")));
                     }
                 };
-                return wallet.pay_wal(recipient, blob_hash, amount_nanos).await.unwrap_or_else(|e| {
-                    tracing::warn!(%e, "Payment proof generation failed");
-                    [0u8; 32]
-                });
+                return match wallet.pay_wal(recipient, blob_hash, amount_nanos).await {
+                    Ok(d) => (d, None),
+                    Err(e) => {
+                        let msg = format!("Payment failed: {e}");
+                        tracing::warn!(%e, "Payment proof generation failed");
+                        ([0u8; 32], Some(msg))
+                    }
+                };
             }
-            Some(None) => return [0u8; 32],
+            Some(None) => return ([0u8; 32], None),
             None => {}
         }
 
         let (reply, rx) = oneshot::channel();
         if tx.send(P2pCommand::GetPeerSuiAddress { peer_id: *peer_id, reply }).await.is_err() {
             self.sui_addr_cache.lock().await.insert(*peer_id, None);
-            return [0u8; 32];
+            return ([0u8; 32], Some("Failed to get peer Sui address".into()));
         }
         let result = tokio::time::timeout(Duration::from_secs(5), rx)
             .await
@@ -141,19 +146,23 @@ impl Resolver {
         }
 
         match result {
-            None => [0u8; 32],
+            None => ([0u8; 32], Some("Peer has no Sui address".into())),
             Some(addr) => {
                 let recipient = match Address::from_bytes(addr) {
                     Ok(a) => a,
                     Err(e) => {
                         tracing::warn!(?addr, %e, "Invalid Sui address from DHT");
-                        return [0u8; 32];
+                        return ([0u8; 32], Some(format!("Invalid Sui address from DHT: {e}")));
                     }
                 };
-                wallet.pay_wal(recipient, blob_hash, amount_nanos).await.unwrap_or_else(|e| {
-                    tracing::warn!(%e, "Payment proof generation failed");
-                    [0u8; 32]
-                })
+                match wallet.pay_wal(recipient, blob_hash, amount_nanos).await {
+                    Ok(d) => (d, None),
+                    Err(e) => {
+                        let msg = format!("Payment failed: {e}");
+                        tracing::warn!(%e, "Payment proof generation failed");
+                        ([0u8; 32], Some(msg))
+                    }
+                }
             }
         }
     }
@@ -167,11 +176,12 @@ impl Resolver {
             let store = self.store.read().await;
             if let Some(data) = store.get(&blob_id_hex)? {
                 tracing::info!(blob_id = %blob_id_hex, "L0: blob found in local cache");
-                return Ok(ResolveResult {
-                    data,
-                    resolution: BlobResolution::LocalCache,
-                    cached: true,
-                });
+            return Ok(ResolveResult {
+                data,
+                resolution: BlobResolution::LocalCache,
+                cached: true,
+                payment_error: None,
+            });
             }
         }
 
@@ -277,11 +287,12 @@ impl Resolver {
             None => return None,
         };
 
+        let (payment_proof, payment_err) = self.resolve_payment(&peer, tx, &blob_id.0, READ_FEE_WAL_NANOS).await;
         let (fetch_reply, fetch_rx) = tokio::sync::oneshot::channel();
         if tx.send(P2pCommand::FetchBlob {
             peer_id: peer,
             blob_id: blob_id.0,
-            payment_tx_digest: self.resolve_payment(&peer, tx, &blob_id.0, READ_FEE_WAL_NANOS).await,
+            payment_tx_digest: payment_proof,
             reply: fetch_reply,
         }).await.is_err() {
             return None;
@@ -295,7 +306,7 @@ impl Resolver {
             }
         };
 
-        self.finalize_l1_fetch(blob_id, blob_id_hex, peer, data).await
+        self.finalize_l1_fetch(blob_id, blob_id_hex, peer, data, payment_err).await
     }
 
     async fn try_direct_peers(
@@ -313,11 +324,12 @@ impl Resolver {
             return None;
         }
         for peer in &connected {
+            let (payment_proof, payment_err) = self.resolve_payment(peer, tx, &blob_id.0, READ_FEE_WAL_NANOS).await;
             let (fetch_reply, fetch_rx) = tokio::sync::oneshot::channel();
             if tx.send(P2pCommand::FetchBlob {
                 peer_id: *peer,
                 blob_id: blob_id.0,
-                payment_tx_digest: self.resolve_payment(peer, tx, &blob_id.0, READ_FEE_WAL_NANOS).await,
+                payment_tx_digest: payment_proof,
                 reply: fetch_reply,
             }).await.is_err() {
                 continue;
@@ -325,7 +337,7 @@ impl Resolver {
             match tokio::time::timeout(Duration::from_secs(30), fetch_rx).await {
                 Ok(Ok(Ok(data))) => {
                     return self.finalize_l1_fetch(
-                        blob_id, blob_id_hex, *peer, data,
+                        blob_id, blob_id_hex, *peer, data, payment_err,
                     ).await;
                 }
                 _ => continue,
@@ -353,13 +365,14 @@ impl Resolver {
         }
 
         for peer in &connected {
+            let (payment_proof, mut payment_err) = self.resolve_payment(peer, tx, &blob_id.0, RANGE_CHUNK * FEE_PER_BYTE_NANOS).await;
             let (fetch_reply, fetch_rx) = tokio::sync::oneshot::channel();
             if tx.send(P2pCommand::FetchRange {
                 peer_id: *peer,
                 blob_id: blob_id.0,
                 offset: 0,
                 length: RANGE_CHUNK,
-                payment_tx_digest: self.resolve_payment(peer, tx, &blob_id.0, RANGE_CHUNK * FEE_PER_BYTE_NANOS).await,
+                payment_tx_digest: payment_proof,
                 reply: fetch_reply,
             }).await.is_err() {
                 continue;
@@ -372,7 +385,7 @@ impl Resolver {
 
             if chunk.len() < RANGE_CHUNK as usize {
                 return self.finalize_l1_fetch(
-                    blob_id, blob_id_hex, *peer, chunk,
+                    blob_id, blob_id_hex, *peer, chunk, payment_err,
                 ).await;
             }
 
@@ -386,12 +399,16 @@ impl Resolver {
                 }
 
                 let (next_reply, next_rx) = tokio::sync::oneshot::channel();
+                let (next_proof, next_err) = self.resolve_payment(peer, tx, &blob_id.0, RANGE_CHUNK * FEE_PER_BYTE_NANOS).await;
+                if next_err.is_some() && payment_err.is_none() {
+                    payment_err = next_err;
+                }
                 if tx.send(P2pCommand::FetchRange {
                     peer_id: *peer,
                     blob_id: blob_id.0,
                     offset,
                     length: RANGE_CHUNK,
-                    payment_tx_digest: self.resolve_payment(peer, tx, &blob_id.0, RANGE_CHUNK * FEE_PER_BYTE_NANOS).await,
+                    payment_tx_digest: next_proof,
                     reply: next_reply,
                 }).await.is_err() {
                     break;
@@ -415,7 +432,7 @@ impl Resolver {
             }
 
             return self.finalize_l1_fetch(
-                blob_id, blob_id_hex, *peer, data,
+                blob_id, blob_id_hex, *peer, data, payment_err,
             ).await;
         }
 
@@ -444,9 +461,11 @@ impl Resolver {
         }
 
         let probers: Vec<&PeerId> = connected.iter().take(MAX_PARALLEL).collect();
-        let probe_payments = futures::future::join_all(
+        let probe_results = futures::future::join_all(
             probers.iter().map(|peer| self.resolve_payment(peer, tx, &blob_id.0, 8 * FEE_PER_BYTE_NANOS))
         ).await;
+        let probe_payments: Vec<[u8; 32]> = probe_results.iter().map(|(p, _)| *p).collect();
+        let mut payment_err: Option<String> = probe_results.into_iter().find_map(|(_, e)| e);
 
         let mut probe_futs = Vec::new();
         for (i, peer) in probers.iter().enumerate() {
@@ -490,9 +509,13 @@ impl Resolver {
             let base_offset = window * n as u64 * CHUNK_SIZE;
 
             let chunkers: Vec<&PeerId> = working.iter().collect();
-            let chunk_payments = futures::future::join_all(
+            let chunk_results = futures::future::join_all(
                 chunkers.iter().map(|peer| self.resolve_payment(peer, tx, &blob_id.0, CHUNK_SIZE * FEE_PER_BYTE_NANOS))
             ).await;
+            let chunk_payments: Vec<[u8; 32]> = chunk_results.iter().map(|(p, _)| *p).collect();
+            if payment_err.is_none() {
+                payment_err = chunk_results.into_iter().find_map(|(_, e)| e);
+            }
 
             let mut fetch_futs = Vec::new();
             for (i, peer) in chunkers.iter().enumerate() {
@@ -558,7 +581,7 @@ impl Resolver {
             if eof {
                 let peer = working[0];
                 return self.finalize_l1_fetch(
-                    blob_id, blob_id_hex, peer, data,
+                    blob_id, blob_id_hex, peer, data, payment_err,
                 ).await;
             }
         }
@@ -568,7 +591,7 @@ impl Resolver {
         }
 
         let peer = working[0];
-        self.finalize_l1_fetch(blob_id, blob_id_hex, peer, data).await
+        self.finalize_l1_fetch(blob_id, blob_id_hex, peer, data, payment_err).await
     }
 
     async fn run_find_providers(
@@ -602,6 +625,7 @@ impl Resolver {
         blob_id_hex: &str,
         peer: PeerId,
         data: Vec<u8>,
+        payment_error: Option<String>,
     ) -> Option<ZingResult<ResolveResult>> {
         if let Err(e) = self.verifier.verify_blob_by_id(blob_id, &data) {
             tracing::warn!(blob_id = %blob_id_hex, error = %e, "L1: verification failed");
@@ -627,6 +651,7 @@ impl Resolver {
             data,
             resolution: BlobResolution::L1Peer,
             cached: true,
+            payment_error,
         }))
     }
 
@@ -650,6 +675,7 @@ impl Resolver {
             data,
             resolution: BlobResolution::L3Walrus,
             cached: true,
+            payment_error: None,
         })
     }
 

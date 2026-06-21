@@ -7,6 +7,10 @@ pub fn Dashboard() -> Element {
         ipc::get_dashboard().await.ok()
     });
 
+    let balance = use_resource(|| async move {
+        ipc::get_wal_balance().await.ok()
+    });
+
     let guard = info.read();
     let inner: Option<&ipc::DashboardInfo> = match &*guard {
         Some(Some(d)) => Some(d),
@@ -14,6 +18,12 @@ pub fn Dashboard() -> Element {
     };
 
     let peer_id = inner.map(|d| d.peer_id.clone()).unwrap_or_else(|| "connecting...".into());
+    let wallet_address = inner.and_then(|d| d.wallet_address.clone());
+    let wallet_display = match &wallet_address {
+        Some(addr) if addr.len() > 12 => format!("{}...{}", &addr[..6], &addr[addr.len() - 4..]),
+        Some(addr) => addr.clone(),
+        None => "No wallet".into(),
+    };
     let listen_addr = inner.map(|d| d.listen_addr.clone()).unwrap_or_else(|| "connecting...".into());
     let connected = inner.map(|d| d.connected_peers.clone()).unwrap_or_default();
     let cache_count = inner.map(|d| d.cache_count).unwrap_or(0);
@@ -26,14 +36,23 @@ pub fn Dashboard() -> Element {
     };
     drop(guard);
 
+    let wal_balance = balance.read();
+    let wal_display = match &*wal_balance {
+        Some(Some(b)) => format!("{} WAL", b.balance_wal),
+        _ => "N/A".into(),
+    };
+    drop(wal_balance);
+
     // Auto-refresh every 3 seconds
     {
         let mut info = info.clone();
+        let mut balance = balance.clone();
         use_effect(move || {
             spawn(async move {
                 loop {
                     gloo_timers::future::TimeoutFuture::new(3000).await;
                     info.restart();
+                    balance.restart();
                 }
             });
         });
@@ -44,6 +63,8 @@ pub fn Dashboard() -> Element {
             div { class: "card",
                  h3 { style: "margin: 0 0 8px 0;", "P2P Node" }
                  p { b { "Peer ID: " } code { "{peer_id}" } }
+                 p { b { "Wallet: " } code { "{wallet_display}" } }
+                 p { b { "WAL Balance: " } "{wal_display}" }
                  p { b { "Listen: " } code { "{listen_addr}" } }
                  p { b { "Connected peers: " } "{connected.len()}" }
                  ul {

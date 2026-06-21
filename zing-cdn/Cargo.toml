@@ -58,6 +58,7 @@ bytes = "1"
 lru = "0.12"
 sha2 = "0.10"
 hex = "0.4"
+prost-types = "0.14"
 
 # Pin allocative to match Walrus's resolved version (0.3.4)
 allocative = "=0.3.4"

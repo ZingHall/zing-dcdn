@@ -51,6 +51,7 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 base64 = "0.22"
 bs58 = "0.5"
+prost-types = { workspace = true }
 
 # Crypto & Encoding — comes transitively through walrus-core
 # reed-solomon-simd = { workspace = true }

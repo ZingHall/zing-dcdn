@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 zing-cdn-core = { path = "../zing-cdn-core" }
 tokio = { workspace = true }
+tokio-stream = "0.1"
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -17,6 +18,9 @@ chrono = { workspace = true }
 walrus-core = { workspace = true }
 walrus-storage-node-client = { workspace = true }
 libp2p = { workspace = true }
+axum = { version = "0.7", features = ["http2"] }
+tower-http = { version = "0.5", features = ["cors"] }
+base64 = "0.22"
 
 # Desktop UI — will be enabled during integration
 # dioxus = { version = "0.7", features = ["desktop"] }

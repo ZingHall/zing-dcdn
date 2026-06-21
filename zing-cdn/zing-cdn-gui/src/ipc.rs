@@ -118,6 +118,7 @@ pub async fn delete_blob(blob_id: &str) -> Result<(), String> {
 #[derive(serde::Deserialize, Clone)]
 pub struct DashboardInfo {
     pub peer_id: String,
+    pub wallet_address: Option<String>,
     pub listen_addr: String,
     pub connected_peers: Vec<String>,
     pub cache_used: u64,
@@ -169,4 +170,99 @@ pub async fn remove_peer(addr: &str) -> Result<(), String> {
         .await
         .map_err(|e| format!("http error: {e}"))?;
     Ok(())
+}
+
+#[derive(serde::Deserialize, Clone)]
+pub struct StakingPeerInfo {
+    pub sui_address: String,
+    pub peer_id_short: String,
+    pub bond: u64,
+    pub is_active: bool,
+    pub is_live: bool,
+}
+
+pub async fn list_staking() -> Result<Vec<StakingPeerInfo>, String> {
+    let url = format!("{}/api/staking", base_url());
+    log(&format!("GET {url}"));
+    let response = Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    let raw = response.text().await.map_err(|e| format!("http error: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("json error: {e}"))?;
+    if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(msg.to_string());
+    }
+    serde_json::from_value::<Vec<StakingPeerInfo>>(value)
+        .map_err(|e| format!("json error: {e}"))
+}
+
+#[derive(serde::Deserialize, Clone)]
+pub struct MyPeerInfo {
+    pub wallet_address: String,
+    pub peer_id_short: Option<String>,
+    pub bond: Option<u64>,
+    pub is_active: Option<bool>,
+    pub is_live: Option<bool>,
+    pub is_registered: bool,
+}
+
+pub async fn get_my_peer_info() -> Result<MyPeerInfo, String> {
+    let url = format!("{}/api/my_peer", base_url());
+    log(&format!("GET {url}"));
+    let response = Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    let raw = response.text().await.map_err(|e| format!("http error: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("json error: {e}"))?;
+    if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(msg.to_string());
+    }
+    serde_json::from_value::<MyPeerInfo>(value)
+        .map_err(|e| format!("json error: {e}"))
+}
+
+#[derive(serde::Deserialize, Clone)]
+pub struct WalBalance {
+    pub balance: u64,
+    pub balance_wal: String,
+}
+
+pub async fn get_wal_balance() -> Result<WalBalance, String> {
+    let url = format!("{}/api/balance", base_url());
+    log(&format!("GET {url}"));
+    let response = Request::get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    let raw = response.text().await.map_err(|e| format!("http error: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("json error: {e}"))?;
+    if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(msg.to_string());
+    }
+    serde_json::from_value::<WalBalance>(value)
+        .map_err(|e| format!("json error: {e}"))
+}
+
+pub async fn register_peer() -> Result<String, String> {
+    let url = format!("{}/api/register", base_url());
+    log(&format!("POST {url}"));
+    let response = Request::post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    let raw = response.text().await.map_err(|e| format!("http error: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("json error: {e}"))?;
+    if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(msg.to_string());
+    }
+    value.get("message")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "No message in response".to_string())
 }

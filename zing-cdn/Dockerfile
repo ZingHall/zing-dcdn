@@ -32,12 +32,16 @@ RUN cargo build --release --bin zing-cdn || echo "Dep build complete (link error
 # --- Layer 2: Real source (rebuilds on any code change) ---
 COPY . /app
 RUN sed -i '/zing-cdn-gui/d' Cargo.toml
+# Force recompilation of zing-cdn + zing-cdn-core crates while keeping deps cached
+RUN rm -rf target/release/zing-cdn target/release/.fingerprint/zing-cdn-* target/release/deps/zing_cdn-* \
+    target/release/.fingerprint/zing_cdn_core-* target/release/deps/zing_cdn_core-* \
+    target/release/libzing_cdn_core.*
 RUN cargo build --release --bin zing-cdn
 
 # --- Runtime ---
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates && \
+RUN apt-get update && apt-get install -y ca-certificates libssl3 libstdc++6 zlib1g liblz4-1 libsnappy1v5 libzstd1 && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/zing-cdn /usr/local/bin/
@@ -45,5 +49,6 @@ COPY config.toml /root/.zing-cdn/config.toml
 
 ENV RUST_LOG=info
 EXPOSE 34291/udp
+EXPOSE 8080/tcp
 
-CMD ["zing-cdn", "--serve", "--listen", "/ip4/0.0.0.0/udp/34291/quic-v1", "--external-addr", "/ip4/213.188.208.246/udp/34291/quic-v1", "--cache-dir", "/data"]
+CMD ["zing-cdn", "--serve", "--listen", "/ip4/0.0.0.0/udp/34291/quic-v1", "--external-addr", "/ip4/213.188.208.246/udp/34291/quic-v1", "--cache-dir", "/data", "--api-port", "8080"]

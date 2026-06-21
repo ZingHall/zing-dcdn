@@ -2,10 +2,13 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use futures::StreamExt;
+use libp2p::PeerId;
 use sha2::{Digest, Sha256};
 use sui_crypto::ed25519::Ed25519PrivateKey;
 use sui_crypto::SuiSigner;
 use sui_rpc::field::FieldMaskUtil;
+use sui_rpc::proto::sui::rpc::v2::{BatchGetObjectsRequest, GetObjectRequest, ListDynamicFieldsRequest};
 use sui_sdk_types::Address;
 
 use crate::types::{ZingError, ZingResult};
@@ -14,9 +17,18 @@ use super::settlement::SettlementConfig;
 
 pub type PaymentProof = [u8; 32];
 
+#[derive(Debug, Clone)]
+pub struct PeerInfo {
+    pub sui_address: String,
+    pub peer_id_b58: String,
+    pub bond: u64,
+    pub is_active: bool,
+}
+
 pub struct ZingWallet {
     address: Address,
     keypair: Ed25519PrivateKey,
+    seed: [u8; 32],
     settlement: Option<SettlementConfig>,
     rpc_url: String,
     payment_counter: AtomicU64,
@@ -34,7 +46,7 @@ impl ZingWallet {
 
         // Load keystore and derive address.
         // Priority: ZING_CDN_SUI_PRIVATE_KEY (single key), ZING_CDN_SUI_KEYSTORE_JSON (array), file.
-        let (keypair, address) = if let Ok(key) = std::env::var("ZING_CDN_SUI_PRIVATE_KEY") {
+        let (keypair, address, seed) = if let Ok(key) = std::env::var("ZING_CDN_SUI_PRIVATE_KEY") {
             decode_and_derive(vec![key])?
         } else if let Ok(json) = std::env::var("ZING_CDN_SUI_KEYSTORE_JSON") {
             let keys: Vec<String> = serde_json::from_str(&json)
@@ -60,6 +72,7 @@ impl ZingWallet {
         Ok(Self {
             address,
             keypair,
+            seed,
             settlement,
             rpc_url: "https://fullnode.mainnet.sui.io:443".into(),
             payment_counter: AtomicU64::new(0),
@@ -156,7 +169,186 @@ impl ZingWallet {
         Ok(())
     }
 
+    pub async fn is_peer_registered(&self) -> ZingResult<bool> {
+        let settlement = match &self.settlement {
+            Some(s) => s, None => return Ok(false),
+        };
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
+
+        let peers_table_id = format!("0x{}", hex::encode(settlement.registry_peers_table_id));
+        let address_bytes: [u8; 32] = self.address.into();
+
+        let request = ListDynamicFieldsRequest::const_default()
+            .with_parent(&peers_table_id)
+            .with_read_mask(sui_rpc::field::FieldMask::from_paths(vec!["name", "value"]));
+
+        let stream = client.list_dynamic_fields(request);
+        let mut stream = std::pin::pin!(stream);
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(df) => {
+                    if let Some(name_bcs) = &df.name {
+                        if let Some(name_bytes) = &name_bcs.value {
+                            if name_bytes.as_ref() == address_bytes {
+                                let vault_id_hex = if let Some(child_id) = &df.child_id {
+                                    child_id.clone()
+                                } else if let Some(value_bcs) = &df.value {
+                                    if let Some(value_bytes) = &value_bcs.value {
+                                        format!("0x{}", hex::encode(value_bytes.as_ref()))
+                                    } else {
+                                        continue;
+                                    }
+                                } else {
+                                    continue;
+                                };
+                                return Self::check_peer_active(&mut client, &vault_id_hex).await;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(%e, "Failed to list dynamic fields from peers table");
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    async fn check_peer_active(
+        client: &mut sui_rpc::Client, vault_id: &str,
+    ) -> ZingResult<bool> {
+        let response = client.ledger_client().get_object(
+            GetObjectRequest::const_default()
+                .with_object_id(vault_id)
+                .with_read_mask(sui_rpc::field::FieldMask::from_paths(vec!["json"])),
+        ).await
+        .map_err(|e| ZingError::SuiClient(format!("get vault: {}", e)))?;
+
+        let object = response.into_inner().object
+            .ok_or_else(|| ZingError::SuiClient("vault object not found".into()))?;
+
+        if let Some(json) = object.json {
+            let json_val: &prost_types::Value = &json;
+            if let Some(prost_types::value::Kind::StructValue(s)) = json_val.kind.as_ref() {
+                if let Some(is_active_val) = s.fields.get("is_active") {
+                    if let Some(prost_types::value::Kind::BoolValue(b)) = is_active_val.kind.as_ref() {
+                        return Ok(*b);
+                    }
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    pub async fn list_all_peers(&self) -> ZingResult<Vec<PeerInfo>> {
+        let settlement = match &self.settlement {
+            Some(s) => s, None => return Ok(vec![]),
+        };
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
+
+        let peers_table_id = format!("0x{}", hex::encode(settlement.registry_peers_table_id));
+
+        let request = ListDynamicFieldsRequest::const_default()
+            .with_parent(&peers_table_id)
+            .with_read_mask(sui_rpc::field::FieldMask::from_paths(vec!["name", "value"]));
+
+        let stream = client.list_dynamic_fields(request);
+        let mut stream = std::pin::pin!(stream);
+
+        let mut peer_object_ids: Vec<String> = Vec::new();
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(df) => {
+                    let object_id = if let Some(child_id) = &df.child_id {
+                        child_id.clone()
+                    } else if let Some(value_bcs) = &df.value {
+                        if let Some(value_bytes) = &value_bcs.value {
+                            format!("0x{}", hex::encode(value_bytes.as_ref()))
+                        } else { continue; }
+                    } else { continue; };
+
+                    peer_object_ids.push(object_id);
+                }
+                Err(e) => {
+                    tracing::warn!(%e, "Failed to list dynamic fields from peers table");
+                }
+            }
+        }
+
+        if peer_object_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let requests: Vec<GetObjectRequest> = peer_object_ids
+            .iter()
+            .map(|id| GetObjectRequest::const_default().with_object_id(id))
+            .collect();
+
+        let response = client
+            .ledger_client()
+            .batch_get_objects(
+                BatchGetObjectsRequest::const_default()
+                    .with_requests(requests)
+                    .with_read_mask(sui_rpc::field::FieldMask::from_paths(vec!["json"])),
+            )
+            .await
+            .map_err(|e| ZingError::SuiClient(format!("batch_get_objects: {}", e)))?;
+
+        let results = response.into_inner().objects;
+
+        let mut peers = Vec::new();
+        for result in results.into_iter() {
+            if let Some(obj) = result.result.and_then(|r| match r {
+                sui_rpc::proto::sui::rpc::v2::get_object_result::Result::Object(o) => Some(o),
+                _ => None,
+            }) {
+                if let Some(json) = &obj.json {
+                    if let Some(info) = parse_peer_json(json) {
+                        peers.push(info);
+                    }
+                }
+            }
+        }
+
+        Ok(peers)
+    }
+
+    pub async fn get_wal_balance(&self) -> ZingResult<u64> {
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
+
+        let wal_coin_type = "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL";
+        let owner = format!("{:#}", self.address);
+
+        let request = sui_rpc::proto::sui::rpc::v2::GetBalanceRequest::const_default()
+            .with_owner(&owner)
+            .with_coin_type(wal_coin_type);
+
+        let response = client
+            .state_client()
+            .get_balance(request)
+            .await
+            .map_err(|e| ZingError::SuiClient(format!("get_balance: {}", e)))?;
+
+        let balance = response.into_inner().balance
+            .ok_or_else(|| ZingError::SuiClient("no balance in response".into()))?;
+
+        Ok(balance.coin_balance.unwrap_or(0))
+    }
+
     pub fn settlement_config(&self) -> Option<&SettlementConfig> { self.settlement.as_ref() }
+
+    pub fn to_libp2p_keypair(&self) -> libp2p::identity::Keypair {
+        let mut seed = self.seed;
+        libp2p::identity::Keypair::ed25519_from_bytes(&mut seed[..])
+            .expect("valid ed25519 seed from wallet")
+    }
 
     fn synthetic_pay(
         &self, recipient: Address, blob_hash: &[u8; 32], amount: u64,
@@ -181,6 +373,7 @@ impl ZingWallet {
         Self {
             address: Address::ZERO,
             keypair: Ed25519PrivateKey::new([0u8; 32]),
+            seed: [0u8; 32],
             settlement: None,
             rpc_url: String::new(),
             payment_counter: AtomicU64::new(0),
@@ -188,7 +381,7 @@ impl ZingWallet {
     }
 }
 
-fn decode_and_derive(keys: Vec<String>) -> ZingResult<(Ed25519PrivateKey, Address)> {
+fn decode_and_derive(keys: Vec<String>) -> ZingResult<(Ed25519PrivateKey, Address, [u8; 32])> {
     for k in &keys {
         let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k)
             .map_err(|e| ZingError::SuiClient(format!("key decode: {}", e)))?;
@@ -197,13 +390,13 @@ fn decode_and_derive(keys: Vec<String>) -> ZingResult<(Ed25519PrivateKey, Addres
                 .map_err(|_| ZingError::SuiClient("invalid key length".into()))?;
             let kp = Ed25519PrivateKey::new(seed);
             let addr = kp.public_key().derive_address();
-            return Ok((kp, addr));
+            return Ok((kp, addr, seed));
         }
     }
     Err(ZingError::SuiClient("no Ed25519 key found".into()))
 }
 
-fn decode_first_matching(keys: Vec<String>, target: Address) -> ZingResult<(Ed25519PrivateKey, Address)> {
+fn decode_first_matching(keys: Vec<String>, target: Address) -> ZingResult<(Ed25519PrivateKey, Address, [u8; 32])> {
     for k in &keys {
         let raw = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, k)
             .map_err(|e| ZingError::SuiClient(format!("key decode: {}", e)))?;
@@ -213,7 +406,7 @@ fn decode_first_matching(keys: Vec<String>, target: Address) -> ZingResult<(Ed25
             let kp = Ed25519PrivateKey::new(seed);
             let addr = kp.public_key().derive_address();
             if addr == target {
-                return Ok((kp, addr));
+                return Ok((kp, addr, seed));
             }
         }
     }
@@ -221,7 +414,6 @@ fn decode_first_matching(keys: Vec<String>, target: Address) -> ZingResult<(Ed25
 }
 
 fn parse_active_address(client_yaml: &Path) -> Option<Address> {
-    use std::str::FromStr;
     let content = std::fs::read_to_string(client_yaml).ok()?;
     for line in content.lines() {
         let t = line.trim();
@@ -231,6 +423,47 @@ fn parse_active_address(client_yaml: &Path) -> Option<Address> {
         }
     }
     None
+}
+
+fn parse_peer_json(json: &prost_types::Value) -> Option<PeerInfo> {
+    let prost_types::value::Kind::StructValue(s) = json.kind.as_ref()? else { return None; };
+
+    let peer_id_b64 = s.fields.get("peer_id")
+        .and_then(|v| v.kind.as_ref())
+        .and_then(|k| match k {
+            prost_types::value::Kind::StringValue(s) => Some(s.clone()),
+            _ => None,
+        })?;
+
+    let peer_id_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &peer_id_b64,
+    ).ok()?;
+
+    let peer_id_b58 = PeerId::from_bytes(&peer_id_bytes).ok()?.to_string();
+
+    let sui_address = s.fields.get("sui_address")
+        .and_then(|v| v.kind.as_ref())
+        .and_then(|k| match k {
+            prost_types::value::Kind::StringValue(s) => Some(s.clone()),
+            _ => None,
+        })?;
+
+    let bond = s.fields.get("bond")
+        .and_then(|v| v.kind.as_ref())
+        .and_then(|k| match k {
+            prost_types::value::Kind::StringValue(s) => s.parse().ok(),
+            _ => None,
+        })?;
+
+    let is_active = s.fields.get("is_active")
+        .and_then(|v| v.kind.as_ref())
+        .and_then(|k| match k {
+            prost_types::value::Kind::BoolValue(b) => Some(*b),
+            _ => None,
+        })?;
+
+    Some(PeerInfo { sui_address, peer_id_b58, bond, is_active })
 }
 
 #[cfg(test)]
@@ -248,5 +481,25 @@ mod tests {
         let p1 = w.synthetic_pay(Address::ZERO, &[2u8; 32], 100).unwrap();
         let p2 = w.synthetic_pay(Address::ZERO, &[2u8; 32], 100).unwrap();
         assert_ne!(p1, p2);
+    }
+    #[tokio::test]
+    #[ignore] // Requires network, run with: cargo test -- --ignored
+    async fn test_is_peer_registered_on_mainnet() {
+        let vault_id: sui_sdk_types::Address =
+            "0x16e909500ee62ea4acf2a0cc9b5fcff86e27e7aa38d39dfc32de6bd73cfca431"
+                .parse().unwrap();
+        let settlement = SettlementConfig::mainnet(vault_id);
+        let wallet = ZingWallet {
+            address: "0x0b3fc768f8bb3c772321e3e7781cac4a45585b4bc64043686beb634d65341798"
+                .parse().unwrap(),
+            keypair: Ed25519PrivateKey::new([0u8; 32]),
+            seed: [0u8; 32],
+            settlement: Some(settlement),
+            rpc_url: "https://fullnode.mainnet.sui.io:443".into(),
+            payment_counter: AtomicU64::new(0),
+        };
+
+        let result = wallet.is_peer_registered().await.unwrap();
+        assert!(result, "Peer should be registered on mainnet");
     }
 }

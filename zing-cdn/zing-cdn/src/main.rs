@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use libp2p::{Multiaddr, identity, PeerId};
+use libp2p::{Multiaddr, PeerId};
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
@@ -21,6 +21,8 @@ use zing_cdn_core::p2p::node::{P2pCommand, ZingP2pNode};
 use zing_cdn_core::sui::wallet::ZingWallet;
 use zing_cdn_core::sui::settlement::SettlementConfig;
 use zing_cdn_core::walrus::verify::BlobVerifier;
+
+mod http;
 
 const CACHE_BUDGET_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
 const DEFAULT_CACHE_DIR: &str = "~/.zing-cdn/cache";
@@ -74,6 +76,10 @@ struct Cli {
     /// Object ID of the shared Registry (for auto-registration)
     #[arg(long)]
     registry_object: Option<String>,
+
+    /// HTTP API listen port (0 to disable). Default: 8080
+    #[arg(long, default_value_t = 8080)]
+    api_port: u16,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -132,8 +138,6 @@ async fn main() -> anyhow::Result<()> {
     let cache_eviction = Arc::new(RwLock::new(eviction));
 
     let store_handle = cache_store.clone();
-    let keypair = load_or_generate_keypair(&cache_dir);
-    tracing::info!(peer_id = %keypair.public().to_peer_id(), "P2P keypair loaded");
 
     let keystore_path = cli.sui_keystore.as_ref().map(|s| resolve_cache_dir(s));
 
@@ -160,6 +164,12 @@ async fn main() -> anyhow::Result<()> {
             let registry_object_id = registry_object.and_then(|v| v.parse().ok())
                 .unwrap_or_else(|| "0x97b5153b9e9897ad1630cdd06e5caa81ebbf8865e96003f38e50c5f1d6752527"
                     .parse().expect("hardcoded registry_object_id"));
+            let registry_peers_table_id = config.settlement
+                .as_ref()
+                .and_then(|s| s.registry_peers_table.as_ref())
+                .and_then(|v| v.parse().ok())
+                .unwrap_or_else(|| "0xbcd17d4df8489569fdca7bc9a795c16a73560efbde2355d91ef9195bf676ea00"
+                    .parse().expect("hardcoded registry_peers_table_id"));
             let wal_package_id = "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59"
                 .parse()
                 .ok();
@@ -169,6 +179,7 @@ async fn main() -> anyhow::Result<()> {
                         package_id,
                         settlement_object_id,
                         registry_object_id,
+                        registry_peers_table_id,
                         vault_object_id,
                         wal_coin_type: "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL".into(),
                         wal_package_id,
@@ -183,28 +194,39 @@ async fn main() -> anyhow::Result<()> {
         _ => None,
     };
 
-    let wallet: Option<Arc<ZingWallet>> = match ZingWallet::from_keystore(keystore_path.as_deref(), settlement_config.clone()).await {
-        Ok(w) => {
-            tracing::info!(address = %w.address(), "Sui wallet loaded for WAL payments");
-            Some(Arc::new(w))
-        }
-        Err(e) => {
-            tracing::warn!(%e, "Sui wallet not available — running without WAL payments");
-            None
-        }
-    };
-    let sui_address_bytes = wallet.as_ref().map(|w| {
-        let addr = w.address();
+    let wallet = Arc::new(
+        ZingWallet::from_keystore(keystore_path.as_deref(), settlement_config.clone()).await
+            .map_err(|e| anyhow::anyhow!("Sui wallet required: {}", e))?
+    );
+    tracing::info!(address = %wallet.address(), "Sui wallet loaded for WAL payments");
+    let sui_address_bytes: Option<[u8; 32]> = {
+        let addr = wallet.address();
         let bytes: [u8; 32] = addr.into();
-        bytes
-    });
+        Some(bytes)
+    };
+
+    let keypair = wallet.to_libp2p_keypair();
+    let peer_id = keypair.public().to_peer_id();
+    tracing::info!(%peer_id, "P2P keypair derived from wallet");
 
     // Auto-register peer if wallet + settlement config are set
-    if let Some(ref wallet) = wallet {
-        if wallet.settlement_config().is_some() {
-            let pid_bytes = keypair.public().to_peer_id().to_bytes();
-            if let Err(e) = wallet.register_peer(pid_bytes).await {
-                tracing::warn!(%e, "Auto-registration failed — peer not registered on-chain");
+    if wallet.settlement_config().is_some() {
+        match wallet.is_peer_registered().await {
+            Ok(true) => {
+                tracing::info!("Peer already registered on-chain, skipping registration");
+            }
+            Ok(false) => {
+                let pid_bytes = peer_id.to_bytes();
+                if let Err(e) = wallet.register_peer(pid_bytes).await {
+                    tracing::warn!(%e, "Auto-registration failed — peer not registered on-chain");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(%e, "Failed to check peer registration status, attempting registration");
+                let pid_bytes = peer_id.to_bytes();
+                if let Err(e) = wallet.register_peer(pid_bytes).await {
+                    tracing::warn!(%e, "Auto-registration failed — peer not registered on-chain");
+                }
             }
         }
     }
@@ -263,10 +285,10 @@ async fn main() -> anyhow::Result<()> {
     if let Some(ref cmd) = cli.command {
         match cmd {
             Command::Get { ref blob_id } => {
-                cmd_get(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction, wallet.clone(), settlement_config.clone()).await
+                cmd_get(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction, Some(wallet.clone()), settlement_config.clone()).await
             }
             Command::Cat { ref blob_id } => {
-                cmd_cat(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction, wallet.clone(), settlement_config.clone()).await
+                cmd_cat(&cli, blob_id, &p2p_tx, &Some(p2p_peer_id), &cache_store, &cache_pinning, &cache_eviction, Some(wallet.clone()), settlement_config.clone()).await
             }
             Command::Metadata { ref blob_id } => cmd_metadata(&cli, blob_id).await,
             Command::Status { ref blob_id } => cmd_status(&cli, blob_id).await,
@@ -282,6 +304,38 @@ async fn main() -> anyhow::Result<()> {
     }
 
     if cli.serve {
+        // Spawn HTTP API server
+        if cli.api_port > 0 {
+            let client = connect_mainnet().await?;
+            let api_state = http::HttpApiState {
+                store: cache_store.clone(),
+                pinning: cache_pinning.clone(),
+                eviction: cache_eviction.clone(),
+                p2p_tx: p2p_command_tx.clone(),
+                peer_id: p2p_peer_id,
+                listen_addr: cli.listen.clone(),
+                bootstrap_peers: Arc::new(RwLock::new(bootstrap_peers_cli.clone())),
+                cache_dir: resolve_cache_dir(&cli.cache_dir),
+                p2p_port: extract_port(&cli.listen).unwrap_or(34291),
+                client: Arc::new(client),
+                wallet: Some(wallet.clone()),
+            };
+
+            let bind_addr = format!("0.0.0.0:{}", cli.api_port);
+            let router = http::build_router(api_state);
+            tokio::spawn(async move {
+                let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
+                    Ok(l) => l,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to bind HTTP API");
+                        return;
+                    }
+                };
+                tracing::info!("HTTP API listening on {bind_addr}");
+                axum::serve(listener, router).await.ok();
+            });
+        }
+
         tracing::info!("P2P node running. Press Ctrl+C to stop.");
         tokio::signal::ctrl_c().await?;
         tracing::info!("Shutting down...");
@@ -299,6 +353,15 @@ fn resolve_cache_dir(path: &str) -> PathBuf {
     } else {
         PathBuf::from(path)
     }
+}
+
+fn extract_port(addr: &Multiaddr) -> Option<u16> {
+    for proto in addr.iter() {
+        if let libp2p::multiaddr::Protocol::Udp(port) = proto {
+            return Some(port);
+        }
+    }
+    None
 }
 
 
@@ -319,28 +382,6 @@ fn parse_bootstrap_peers(inputs: &[String]) -> Vec<(libp2p::PeerId, Multiaddr)> 
             Some((peer_id, addr))
         })
         .collect()
-}
-
-fn load_or_generate_keypair(cache_dir: &PathBuf) -> identity::Keypair {
-    let path = cache_dir.join("keypair");
-    if let Ok(data) = std::fs::read(&path) {
-        if let Ok(kp) = identity::Keypair::from_protobuf_encoding(&data) {
-            return kp;
-        }
-    }
-    let kp = identity::Keypair::generate_ed25519();
-    let data = kp.to_protobuf_encoding().expect("serialize keypair");
-    if std::fs::OpenOptions::new().write(true).create_new(true).open(&path)
-        .and_then(|mut f| std::io::Write::write_all(&mut f, &data))
-        .is_err()
-    {
-        if let Ok(data) = std::fs::read(&path) {
-            if let Ok(kp) = identity::Keypair::from_protobuf_encoding(&data) {
-                return kp;
-            }
-        }
-    }
-    kp
 }
 
 async fn connect_mainnet() -> anyhow::Result<ZingClient> {
