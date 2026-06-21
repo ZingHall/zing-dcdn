@@ -211,23 +211,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Auto-register peer if wallet + settlement config are set
     if wallet.settlement_config().is_some() {
-        match wallet.is_peer_registered().await {
-            Ok(true) => {
-                tracing::info!("Peer already registered on-chain, skipping registration");
-            }
-            Ok(false) => {
-                let pid_bytes = peer_id.to_bytes();
-                if let Err(e) = wallet.register_peer(pid_bytes).await {
-                    tracing::warn!(%e, "Auto-registration failed — peer not registered on-chain");
-                }
-            }
-            Err(e) => {
-                tracing::warn!(%e, "Failed to check peer registration status, attempting registration");
-                let pid_bytes = peer_id.to_bytes();
-                if let Err(e) = wallet.register_peer(pid_bytes).await {
-                    tracing::warn!(%e, "Auto-registration failed — peer not registered on-chain");
-                }
-            }
+        let pid_bytes = peer_id.to_bytes();
+        if let Err(e) = wallet.ensure_peer_registered(pid_bytes).await {
+            tracing::warn!(%e, "Auto-registration/update failed");
         }
     }
 

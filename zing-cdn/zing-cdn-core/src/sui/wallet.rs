@@ -25,6 +25,13 @@ pub struct PeerInfo {
     pub is_active: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct RegisteredPeerInfo {
+    pub peer_id_bytes: Vec<u8>,
+    pub peer_object_id: String,
+    pub initial_shared_version: u64,
+}
+
 pub struct ZingWallet {
     address: Address,
     keypair: Ed25519PrivateKey,
@@ -344,6 +351,141 @@ impl ZingWallet {
 
     pub fn settlement_config(&self) -> Option<&SettlementConfig> { self.settlement.as_ref() }
 
+    /// Fetch the on-chain registered Peer info for this wallet.
+    /// Returns None if not registered.
+    pub async fn get_registered_peer_info(&self) -> ZingResult<Option<RegisteredPeerInfo>> {
+        let settlement = match &self.settlement {
+            Some(s) => s, None => return Ok(None),
+        };
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
+
+        let peers_table_id = format!("0x{}", hex::encode(settlement.registry_peers_table_id));
+        let address_bytes: [u8; 32] = self.address.into();
+
+        let request = ListDynamicFieldsRequest::const_default()
+            .with_parent(&peers_table_id)
+            .with_read_mask(sui_rpc::field::FieldMask::from_paths(vec!["name", "value"]));
+
+        let stream = client.list_dynamic_fields(request);
+        let mut stream = std::pin::pin!(stream);
+
+        let mut peer_object_id: Option<String> = None;
+
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(df) => {
+                    if let Some(name_bcs) = &df.name {
+                        if let Some(name_bytes) = &name_bcs.value {
+                            if name_bytes.as_ref() == address_bytes {
+                                let obj_id = if let Some(child_id) = &df.child_id {
+                                    child_id.clone()
+                                } else if let Some(value_bcs) = &df.value {
+                                    if let Some(value_bytes) = &value_bcs.value {
+                                        format!("0x{}", hex::encode(value_bytes.as_ref()))
+                                    } else { continue; }
+                                } else { continue; };
+                                peer_object_id = Some(obj_id);
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(%e, "Failed to list dynamic fields from peers table");
+                }
+            }
+        }
+
+        let peer_object_id = match peer_object_id {
+            Some(id) => id,
+            None => return Ok(None),
+        };
+
+        let response = client.ledger_client().get_object(
+            GetObjectRequest::const_default()
+                .with_object_id(&peer_object_id)
+                .with_read_mask(sui_rpc::field::FieldMask::from_paths(vec!["json", "version", "owner"])),
+        ).await
+        .map_err(|e| ZingError::SuiClient(format!("get peer object: {}", e)))?;
+
+        let object = response.into_inner().object
+            .ok_or_else(|| ZingError::SuiClient("peer object not found".into()))?;
+
+        let json = object.json.as_ref()
+            .ok_or_else(|| ZingError::SuiClient("peer object has no json".into()))?;
+
+        let peer_id_bytes = parse_peer_id_from_json(json)?;
+
+        let initial_shared_version = object.owner
+            .as_ref()
+            .and_then(|o| o.version)
+            .ok_or_else(|| ZingError::SuiClient("peer object has no initial_shared_version".into()))?;
+
+        Ok(Some(RegisteredPeerInfo {
+            peer_id_bytes,
+            peer_object_id,
+            initial_shared_version,
+        }))
+    }
+
+    /// Update the registered peer_id on-chain if it differs from the current peer_id.
+    pub async fn update_peer_id(&self, new_peer_id_bytes: Vec<u8>) -> ZingResult<()> {
+        let settlement = match &self.settlement {
+            Some(s) => s, None => return Ok(()),
+        };
+
+        let info = self.get_registered_peer_info().await?
+            .ok_or_else(|| ZingError::SuiClient("not registered".into()))?;
+
+        if info.peer_id_bytes == new_peer_id_bytes {
+            tracing::info!("Peer ID already matches on-chain, skipping update");
+            return Ok(());
+        }
+
+        let mut client = sui_rpc::Client::new(&self.rpc_url)
+            .map_err(|e| ZingError::SuiClient(format!("rpc: {}", e)))?;
+
+        let peer_obj_addr: sui_sdk_types::Address = info.peer_object_id.parse()
+            .map_err(|e| ZingError::SuiClient(format!("parse peer object id: {}", e)))?;
+
+        let tx = settlement.build_update_peer_id_transaction(
+            self.address, peer_obj_addr, info.initial_shared_version, new_peer_id_bytes,
+        );
+
+        let transaction = tx.build(&mut client).await
+            .map_err(|e| ZingError::SuiClient(format!("build update: {}", e)))?;
+
+        let signature = self.keypair.sign_transaction(&transaction)
+            .map_err(|e| ZingError::SuiClient(format!("sign: {}", e)))?;
+
+        let request = sui_rpc::proto::sui::rpc::v2::ExecuteTransactionRequest::new(transaction.into())
+            .with_signatures(vec![signature.into()]);
+
+        let response = client
+            .execute_transaction_and_wait_for_checkpoint(request, Duration::from_secs(60))
+            .await
+            .map_err(|e| ZingError::SuiClient(format!("update peer id tx: {}", e)))?;
+
+        let digest = response.into_inner().transaction
+            .and_then(|t| t.digest).unwrap_or_default();
+        tracing::info!(tx_digest = %digest, "Peer ID updated on-chain");
+        Ok(())
+    }
+
+    /// Ensure the on-chain peer_id matches the current peer_id.
+    /// Registers if not registered, updates if mismatch.
+    pub async fn ensure_peer_registered(&self, peer_id_bytes: Vec<u8>) -> ZingResult<()> {
+        match self.is_peer_registered().await {
+            Ok(true) => {
+                self.update_peer_id(peer_id_bytes).await
+            }
+            _ => {
+                self.register_peer(peer_id_bytes).await
+            }
+        }
+    }
+
     pub fn to_libp2p_keypair(&self) -> libp2p::identity::Keypair {
         let mut seed = self.seed;
         libp2p::identity::Keypair::ed25519_from_bytes(&mut seed[..])
@@ -423,6 +565,25 @@ fn parse_active_address(client_yaml: &Path) -> Option<Address> {
         }
     }
     None
+}
+
+fn parse_peer_id_from_json(json: &prost_types::Value) -> ZingResult<Vec<u8>> {
+    let s = match json.kind.as_ref() {
+        Some(prost_types::value::Kind::StructValue(s)) => s,
+        _ => return Err(ZingError::SuiClient("peer object json not a struct".into())),
+    };
+
+    let peer_id_b64 = s.fields.get("peer_id")
+        .and_then(|v| v.kind.as_ref())
+        .and_then(|k| match k {
+            prost_types::value::Kind::StringValue(s) => Some(s.clone()),
+            _ => None,
+        }).ok_or_else(|| ZingError::SuiClient("missing peer_id field".into()))?;
+
+    base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &peer_id_b64,
+    ).map_err(|e| ZingError::SuiClient(format!("decode peer_id: {}", e)))
 }
 
 fn parse_peer_json(json: &prost_types::Value) -> Option<PeerInfo> {

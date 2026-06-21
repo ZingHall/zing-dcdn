@@ -199,6 +199,7 @@ pub fn build_router(state: HttpApiState) -> axum::Router {
         .route("/api/v1/my_peer", axum::routing::get(handle_my_peer))
         .route("/api/v1/balance", axum::routing::get(handle_balance))
         .route("/api/v1/register", axum::routing::post(handle_register))
+        .route("/api/v1/update_peer_id", axum::routing::post(handle_update_peer_id))
         .layer(cors)
         .with_state(state)
 }
@@ -551,5 +552,22 @@ pub async fn handle_register(
     Ok(axum::Json(RegisterResult {
         success: true,
         message: "Peer registered successfully".into(),
+    }))
+}
+
+pub async fn handle_update_peer_id(
+    axum::extract::State(state): axum::extract::State<HttpApiState>,
+) -> Result<axum::Json<RegisterResult>, (axum::http::StatusCode, String)> {
+    let wallet = state.wallet.as_ref()
+        .ok_or_else(|| (axum::http::StatusCode::BAD_REQUEST, "Wallet not configured".into()))?;
+
+    let peer_id_bytes = state.peer_id.to_bytes();
+
+    wallet.update_peer_id(peer_id_bytes).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    Ok(axum::Json(RegisterResult {
+        success: true,
+        message: "Peer ID updated successfully".into(),
     }))
 }

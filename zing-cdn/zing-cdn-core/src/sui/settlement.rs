@@ -16,7 +16,7 @@ pub struct SettlementConfig {
 impl SettlementConfig {
     pub fn mainnet(vault_object_id: sui_sdk_types::Address) -> Self {
         Self {
-            package_id: "0xc584ff1d0d76f4da6aa3b9115263f248e1b0cf60b37d0fc96d2b49b2b72997c8"
+            package_id: "0xb4307939d0cf205880746372d8a467af67f886122fde3ed69fd912885848e8f8"
                 .parse().expect("invalid package_id"),
             settlement_object_id: "0xc58e9b7417fdc83743b46a3f9009b10868f05bb1f2283f08c7021ac3e7f6c308"
                 .parse().expect("invalid settlement_object_id"),
@@ -109,6 +109,41 @@ impl SettlementConfig {
 
         tx.set_sender(sender);
         tx.set_gas_budget(10_000_000);
+        tx
+    }
+
+    /// Build PTB for staking::update_peer_id().
+    /// Updates the peer_id on an existing Peer object.
+    /// `peer_object_id` and `peer_initial_shared_version` come from fetching
+    /// the existing Peer object via RPC.
+    pub fn build_update_peer_id_transaction(
+        &self,
+        sender: sui_sdk_types::Address,
+        peer_object_id: sui_sdk_types::Address,
+        peer_initial_shared_version: u64,
+        new_peer_id: Vec<u8>,
+    ) -> sui_transaction_builder::TransactionBuilder {
+        let mut tx = sui_transaction_builder::TransactionBuilder::new();
+
+        let registry_input = tx.object(sui_transaction_builder::ObjectInput::shared(
+            self.registry_object_id, self.registry_initial_shared_version, false,
+        ));
+        let peer_input = tx.object(sui_transaction_builder::ObjectInput::shared(
+            peer_object_id, peer_initial_shared_version, true,
+        ));
+        let peer_id_input = tx.pure(&new_peer_id);
+
+        tx.move_call(
+            sui_transaction_builder::Function::new(
+                self.package_id,
+                sui_sdk_types::Identifier::from_static("staking"),
+                sui_sdk_types::Identifier::from_static("update_peer_id"),
+            ),
+            vec![registry_input, peer_input, peer_id_input],
+        );
+
+        tx.set_sender(sender);
+        tx.set_gas_budget(5_000_000);
         tx
     }
 }
