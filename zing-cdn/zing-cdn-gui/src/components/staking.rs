@@ -27,8 +27,6 @@ pub fn Staking() -> Element {
     };
     drop(my_info);
 
-    let is_registered = my_peer_data.as_ref().map(|p| p.is_registered).unwrap_or(false);
-
     {
         let mut peers = peers.clone();
         use_effect(move || {
@@ -66,6 +64,19 @@ pub fn Staking() -> Element {
         });
     };
 
+    let on_update_peer_id = move |_| {
+        spawn(async move {
+            match ipc::update_peer_id().await {
+                Ok(msg) => {
+                    add_toast(&msg, ToastLevel::Success);
+                }
+                Err(e) => {
+                    add_toast(&format!("Update failed: {}", e), ToastLevel::Error);
+                }
+            }
+        });
+    };
+
     let my_peer_card = if let Some(my) = &my_peer_data {
         if my.is_registered {
             Some(rsx! {
@@ -85,6 +96,16 @@ pub fn Staking() -> Element {
                     }
                     p { b { "Live: " }
                         if my.is_live.unwrap_or(false) { "Yes" } else { "No" }
+                    }
+                    if my.needs_update {
+                        p { style: "color: #e65100; font-size: 0.85rem; margin: 4px 0;",
+                            "on-chain peer ID differs from current. Update to match."
+                        }
+                        button {
+                            onclick: on_update_peer_id,
+                            style: "background: #e65100; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 0.9rem; margin-top: 8px;",
+                            "Update Peer ID"
+                        }
                     }
                 }
             })

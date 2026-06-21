@@ -426,6 +426,7 @@ pub struct MyPeerInfo {
     pub is_active: Option<bool>,
     pub is_live: Option<bool>,
     pub is_registered: bool,
+    pub needs_update: bool,
 }
 
 pub async fn get_my_peer_info(state: &HttpApiState) -> Result<MyPeerInfo, String> {
@@ -448,9 +449,12 @@ pub async fn get_my_peer_info(state: &HttpApiState) -> Result<MyPeerInfo, String
         p.sui_address == wallet_address || p.sui_address == wallet_address.strip_prefix("0x").unwrap_or(&wallet_address)
     });
 
+    let current_peer_id_b58 = state.peer_id.to_string();
+
     match my_peer {
         Some(p) => {
             let is_live = connected_ids.contains(&p.peer_id_b58);
+            let needs_update = p.peer_id_b58 != current_peer_id_b58;
             let short = if p.peer_id_b58.len() > 16 {
                 format!("{}...{}", &p.peer_id_b58[..8], &p.peer_id_b58[p.peer_id_b58.len() - 8..])
             } else {
@@ -463,6 +467,7 @@ pub async fn get_my_peer_info(state: &HttpApiState) -> Result<MyPeerInfo, String
                 is_active: Some(p.is_active),
                 is_live: Some(is_live),
                 is_registered: true,
+                needs_update,
             })
         }
         None => Ok(MyPeerInfo {
@@ -472,6 +477,7 @@ pub async fn get_my_peer_info(state: &HttpApiState) -> Result<MyPeerInfo, String
             is_active: None,
             is_live: None,
             is_registered: false,
+            needs_update: false,
         }),
     }
 }

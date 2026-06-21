@@ -206,6 +206,7 @@ pub struct MyPeerInfo {
     pub is_active: Option<bool>,
     pub is_live: Option<bool>,
     pub is_registered: bool,
+    pub needs_update: bool,
 }
 
 pub async fn get_my_peer_info() -> Result<MyPeerInfo, String> {
@@ -250,6 +251,25 @@ pub async fn get_wal_balance() -> Result<WalBalance, String> {
 
 pub async fn register_peer() -> Result<String, String> {
     let url = format!("{}/api/register", base_url());
+    log(&format!("POST {url}"));
+    let response = Request::post(&url)
+        .send()
+        .await
+        .map_err(|e| format!("http error: {e}"))?;
+    let raw = response.text().await.map_err(|e| format!("http error: {e}"))?;
+    let value: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| format!("json error: {e}"))?;
+    if let Some(msg) = value.get("error").and_then(|v| v.as_str()) {
+        return Err(msg.to_string());
+    }
+    value.get("message")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "No message in response".to_string())
+}
+
+pub async fn update_peer_id() -> Result<String, String> {
+    let url = format!("{}/api/update_peer_id", base_url());
     log(&format!("POST {url}"));
     let response = Request::post(&url)
         .send()

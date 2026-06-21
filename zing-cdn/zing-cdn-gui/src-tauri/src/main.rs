@@ -229,6 +229,7 @@ fn main() {
                 .route("/api/my_peer", routing::get(handle_my_peer))
                 .route("/api/balance", routing::get(handle_balance))
                 .route("/api/register", routing::post(handle_register))
+                .route("/api/update_peer_id", routing::post(handle_update_peer_id))
                 .layer(cors)
                 .with_state(api_state);
 
@@ -388,5 +389,17 @@ async fn handle_register(State(state): State<HttpApiState>) -> Json<serde_json::
     match api_http::register_peer(&state).await {
         Ok(result) => Json(serde_json::to_value(result).unwrap()),
         Err(e) => Json(serde_json::json!({"error": e})),
+    }
+}
+
+async fn handle_update_peer_id(State(state): State<HttpApiState>) -> Json<serde_json::Value> {
+    let wallet = match state.wallet.as_ref() {
+        Some(w) => w,
+        None => return Json(serde_json::json!({"error": "Wallet not configured"})),
+    };
+    let peer_id_bytes = state.peer_id.to_bytes();
+    match wallet.update_peer_id(peer_id_bytes).await {
+        Ok(()) => Json(serde_json::json!({"success": true, "message": "Peer ID updated successfully"})),
+        Err(e) => Json(serde_json::json!({"error": e.to_string()})),
     }
 }
